@@ -6,7 +6,8 @@
     # sentiwordNet은 단순 wordNet에 pos, neg, obj score를 나타내서. 향후 어떻게 활용할지 고민.
     
 # 2. reversed doc 구하는 logic (pos tag 사용)
-    # 반대의 레이블을 만들어내는 상황에서는 
+    # 반대의 레이블을 만들어내는 상황 규칙 정하기 
+    # reversed doc 구할 때, origin doc과 완전 일치한다면 ? 
     
 # 3. perturbed samples에 대해서는 hypernym, synonym, hyponym, neighbor_word
     # 같은 레이블 perturbed sample 할때는 모든 tokens에 대해서 위 처리를 해도 무방
@@ -14,9 +15,10 @@
 # 4. perturbed samples에 대해서만 meta learning을 통해 generalization for unseen data
 
 # 5. binary classification 방법 이외의 다중 분류 문제에 접근하기 위한 방법으로 attention을 통해 사전을 구축하고, 
-# 사전에 매칭되는 단어들을 다른 클래스의 단어로 바꾸고, 레이블도 해당 클래스의 레이블로 바꾸는 방법 관련     
+    # 사전에 매칭되는 단어들을 다른 클래스의 단어로 바꾸고, 레이블도 해당 클래스의 레이블로 바꾸는 방법 관련     
 
-from nltk.corpus import worßßdnet as wn
+
+from nltk.corpus import wordnet as wn
 from nltk.corpus import sentiwordnet as swn
 import nltk
 
@@ -232,10 +234,22 @@ def get_senti_lexicon():
 
 
 # load dataset
-dataset = get_pair_dataset('sst2_train_500.txt')
+origin_dataset = 'sst2_train_500.txt'
+dataset = get_pair_dataset(origin_dataset)
 
-for idx, data in enumerate(dataset):
-    origin_label, origin_text = data[0], data[1]
-    reverse_label, reverse_text = gen_reverse_sent(data, get_senti_lexicon())
-    similar_label, similar_text = gen_similiar_sent(data)
-
+with open('augmented_' + origin_dataset,'w') as fw:
+    for idx, data in enumerate(dataset):
+        origin_label, origin_text = data[0], data[1]
+        reverse_label, reverse_text = gen_reverse_sent(data, get_senti_lexicon())
+        similar_label, similar_text = gen_similiar_sent(data)
+        
+        origin = origin_text + '\t ' + str(origin_label) +'\n'
+        similar = similar_text + '\t ' + str(similar_label) +'\n'
+        reverse = reverse_text + '\t ' +  str(reverse_label) +'\n'
+        
+        if origin_text == reverse_text:
+            continue
+        
+        fw.write(origin)
+        fw.write(similar)
+        fw.write(reverse)
