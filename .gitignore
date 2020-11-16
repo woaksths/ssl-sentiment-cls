@@ -1,5 +1,5 @@
 venv
-*ipynb
+*.ipynb
 /dataset
 __pycache__
 .DS_Store
