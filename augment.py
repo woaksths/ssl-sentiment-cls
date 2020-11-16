@@ -234,7 +234,7 @@ def get_senti_lexicon():
 
 
 # load dataset
-origin_dataset = 'sst2_train_500.txt'
+origin_dataset = 'sst2_train_500.txt'  
 dataset = get_pair_dataset(origin_dataset)
 
 with open('augmented_' + origin_dataset,'w') as fw:
