@@ -7,3 +7,4 @@ jupyterlab
 torchtext
 ipython==7.9
 matplotlib
+nltk

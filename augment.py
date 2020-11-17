@@ -1,59 +1,28 @@
-#!/usr/bin/env python
-# coding: utf-8
+# 1. sentiword 구성 방법 -> 1. opinion_lexicion(positive, negative)  2. vader_lexicon 3. sentiwordNet 
+    # opinion_lexicon + vader_lexicon  
+    # well defined 된 lexicon 추가 관련 고민 
+    # lexicon 구성 시에 pos, neg lexicon 별도로 합치는 것을 원칙으로
 
-# 1. sentiword 어떻게 찾냐? -> 1. opinion_lexicion(positive, negative)  2. vader_lexicon 3. sentiwordNet 
-    # opinion_lexicon + vader_lexicon 
-    # sentiwordNet은 단순 wordNet에 pos, neg, obj score를 나타내서. 향후 어떻게 활용할지 고민.
-    
 # 2. reversed doc 구하는 logic (pos tag 사용)
-    # 반대의 레이블을 만들어내는 상황 규칙 정하기 
-    # reversed doc 구할 때, origin doc과 완전 일치한다면 ? 
-    
-# 3. perturbed samples에 대해서는 hypernym, synonym, hyponym, neighbor_word
-    # 같은 레이블 perturbed sample 할때는 모든 tokens에 대해서 위 처리를 해도 무방
-    
-# 4. perturbed samples에 대해서만 meta learning을 통해 generalization for unseen data
+    # Issue1. reversed doc 구할 때, origin doc과 완전 일치하는 문제 
+    # Issue2. 학습 데이터 내에 위 단어에 대응하는 antynom을 구하지 못했다면,학습 데이터 내 존재하는 단어중에 임의의 부정의 단어로 random replacement 작업을 진행
 
-# 5. binary classification 방법 이외의 다중 분류 문제에 접근하기 위한 방법으로 attention을 통해 사전을 구축하고, 
+# 3. WordNet 치환 operation 1. unchaged 2. synonyms 3. hyponyms 4. hypernyms 5. antonyms(if 문장에 sentiword 존재)        
+
+# 4. perturbed samples-meta learning
+
+# 5. binary classification 방법 이외의 다중 분류 문제에 접근 (If possible) 
+    # attention을 통해 사전을 구축하고, 
     # 사전에 매칭되는 단어들을 다른 클래스의 단어로 바꾸고, 레이블도 해당 클래스의 레이블로 바꾸는 방법 관련     
-
 
 from nltk.corpus import wordnet as wn
 from nltk.corpus import sentiwordnet as swn
 import nltk
+from augmentation.lexicon_utils import get_pair_dataset, get_word_statistics, get_senti_lexicon
+from augmentation.lexicon_config import NEGATOR, CONTRAST, END_WORDS, STOP_WORDS, WORD_STATS, POS_LEXICONS, NEG_LEXICONS, SENTI_LEXICONS 
+from nltk.stem import WordNetLemmatizer
+import random
 
-NEGATOR = {"aint", "arent","cannot","cant","couldnt","darent", "didnt","doesnt","ain't","aren't",
-        "can't","couldn't","daren't","didn't", "doesn't","dont","hadnt", "hasnt","havent","isnt",
-        "mightnt","mustnt","neither","don't","hadn't","hasn't","haven't","isn't",
-        "mightn't","mustn't","neednt","needn't","never","none","nope","nor",
-        "not","nothing","nowhere","oughtnt","shant","shouldnt","uhuh","wasnt",
-        "werent","oughtn't","shan't","shouldn't","uh-uh", "wasn't","weren't","without",
-        "wont","wouldnt","won't","wouldn't","rarely","seldom","despite","no"}
-CONTRAST = ['but', 'however', 'But', 'However']
-END_WORDS = ['.', ',', '!', '?', '...']
-
-
-STOP_WORDS = ['i', 'me', 'my', 'myself', 'we', 'our', 
-			'ours', 'ourselves', 'you', 'your', 'yours', 
-			'yourself', 'yourselves', 'he', 'him', 'his', 
-			'himself', 'she', 'her', 'hers', 'herself', 
-			'it', 'its', 'itself', 'they', 'them', 'their', 
-			'theirs', 'themselves', 'what', 'which', 'who', 
-			'whom', 'this', 'that', 'these', 'those', 'am', 
-			'is', 'are', 'was', 'were', 'be', 'been', 'being', 
-			'have', 'has', 'had', 'having', 'do', 'does', 'did',
-			'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or',
-			'because', 'as', 'until', 'while', 'of', 'at', 
-			'by', 'for', 'with', 'about', 'against', 'between',
-			'into', 'through', 'during', 'before', 'after', 
-			'above', 'below', 'to', 'from', 'up', 'down', 'in',
-			'out', 'on', 'off', 'over', 'under', 'again', 
-			'further', 'then', 'once', 'here', 'there', 'when', 
-			'where', 'why', 'how', 'all', 'any', 'both', 'each', 
-			'few', 'more', 'most', 'other', 'some', 'such', 'no', 
-			'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 
-			'very', 's', 't', 'can', 'will', 'just', 'don', 
-			'should', 'now', '']
 
 def tokenize_and_tag(sent):
     token_list = nltk.word_tokenize(sent)
@@ -65,7 +34,6 @@ def get_wn_params(word_pos):
     adj_pos_list = ['JJ' ,'JJS' ,'JJR']
     rb_pos_list = ['RB' , 'RBS' , 'RBR'] 
     verb_pos_list = ['VB' ,'VBZ' , 'VBD' , 'VBN' , 'VBG' , 'VBP']
-    
     if word_pos[1] in adj_pos_list:
         param = ['s', 'a']
     elif word_pos[1] in rb_pos_list:
@@ -87,6 +55,22 @@ def penn_to_wn(tag):
     return None
 
 
+def get_wordnet_pos(word):
+    """Map POS tag to first character lemmatize() accepts"""
+    tag = nltk.pos_tag([word])[0][1][0].upper()    
+    tag_dict = {"J": wn.ADJ,
+                "N": wn.NOUN,
+                "V": wn.VERB,
+                "R": wn.ADV}
+    return tag_dict.get(tag, wn.NOUN)
+
+
+def get_lemmatized_sent(sent):
+    tokens_list = nltk.word_tokenize(sent)
+    lemmatizer = WordNetLemmatizer()
+    return [lemmatizer.lemmatize(w, get_wordnet_pos(w)) for w in nltk.word_tokenize(sent)]
+
+
 def get_antonyms(word):
     antonyms_list = []
     for syn in wn.synsets(word):
@@ -100,83 +84,95 @@ def get_antonyms(word):
     return list(antonyms_list)
 
 
-def get_synonyms(word):
+def get_synonyms(origin_word, tag):
     synonyms = set()
-    for syn in wn.synsets(word):
+    tag_list = penn_to_wn(tag)
+    for syn in wn.synsets(origin_word):
         for term in syn.lemmas():
             term = term.name().replace("_", " ").replace("-"," ").lower()
             term = "".join([char for char in term if char in ' qwertyuiopasdfghjklzxcvbnm'])
             synonyms.add(term)
-    if word in synonyms:
-        synonyms.remove(word)
-    if len(synonyms) == 0:
-        synonyms = [word]
+    if origin_word in synonyms:
+        synonyms.remove(origin_word)
     return list(synonyms)
 
 
-def get_hypernyms(word, tag):
-    hypernyms = []    
-    for syn in wn.synsets(word):
+def get_hypernyms(origin_word, tag):
+    hypernyms = []
+    tag_list = penn_to_wn(tag)
+    for syn in wn.synsets(origin_word):
         for hyp in syn.hypernyms():
             hypernyms.extend([word.replace("_"," ").replace("-"," ") for word in hyp.lemma_names()])
- 
-    hypernyms = [word.replace("_"," ").replace("-"," ") for word in hypernyms]
-    if len(hypernyms) == 0:
-        hypernyms = [word]
+    if origin_word in hypernyms:
+        hypernyms.remove(origin_word)
     return list(set(hypernyms))
-    
 
-def get_hyponyms(word, tag):
+
+def get_hyponyms(origin_word, tag):
     hyponyms = []
-    for syn in wn.synsets(word):
-        if syn.pos() != 'n':
-            continue
-        for word in syn.hyponyms():
-            hyponyms.extend(word.lemma_names())
-    
+    tag_list = penn_to_wn(tag)
+    for syn in wn.synsets(origin_word):
+        for hyp in syn.hyponyms():
+            hyponyms.extend(hyp.lemma_names())
     hyponyms = [word.replace("_"," ").replace("-"," ") for word in hyponyms]
-    if len(hyponyms) == 0:
-        hyponyms = [word]
-    return hyponyms
+    if origin_word in hyponyms:
+        hyponyms.remove(origin_word)
+    return list(set(hyponyms))
 
 
-def get_pair_dataset(path):
-    with open(path,'r') as rf:
-        dataset = rf.read().split('\n')
-        pair_d = []
-        for d in dataset:
-            if d.strip() == '':
-                continue
-            label, data = d.split('\t')
-            pair_d.append((label,data))
-    return pair_d
+def sample_antonym(token, origin_label):
+    '''
+    origin label과 반대되는 클래스의 단어집합과 학습 데이터와 교차하는 단어 중 임의로 샘플링
+    '''
+    origin_label = int(origin_label)
+    intersection = None
+    result = ''
+    if origin_label == 0:
+        # sample from intersection btw positive lexicons and traning dataset
+        intersection = POS_LEXICONS & set(WORD_STATS)
+        intersection = {word: WORD_STATS[word] for word in intersection}
+        intersection = sorted(intersection.items(), key=lambda x: x[1],reverse=True)
+        intersection = list(intersection)[0:50]
+        result = random.choice(intersection)[0]
+    else:
+        # sample from intersection btw positive lexicons and training dataset 
+        intersection = NEG_LEXICONS & set(WORD_STATS)
+        intersection = {word: WORD_STATS[word] for word in intersection}
+        intersection = sorted(intersection.items(), key=lambda x: x[1],reverse=True)
+        intersection = list(intersection)[0:50]
+        result = random.choice(intersection)[0]
+    return result
 
 
-def gen_reverse_sent(data, senti_lexicon):
+def gen_reverse_sent(data):
     origin_label = data[0]
     origin_text = data[1]
-    tokens_list = nltk.word_tokenize(origin_text)
-    pos_token_list = nltk.pos_tag(tokens_list)
     reversed_sent = []
     reversed_label = 1 - int(origin_label)
+    token_pos_list = tokenize_and_tag(origin_text)
+    lemmatized_tokens = get_lemmatized_sent(origin_text)
     i = 0
-    
-    # 치환단어 tagging 형용사, 부사 
-    while i != len(pos_token_list):        
-        token = pos_token_list[i][0].lower()
-        tag = penn_to_wn(pos_token_list[i][1])
+    while i != len(token_pos_list):
+        token = token_pos_list[i][0].lower()
+        tag = penn_to_wn(token_pos_list[i][1])
+        lemmatized_token = lemmatized_tokens[i]
         if token in NEGATOR:
             i += 1 
-            while i != len(pos_token_list) and pos_token_list[i][0] not in END_WORDS and pos_token_list[i][0] not in NEGATOR:
-                reversed_sent.append(pos_token_list[i][0])
+            while i != len(token_pos_list) and token_pos_list[i][0] not in END_WORDS and token_pos_list[i][0] not in NEGATOR:
+                reversed_sent.append(token_pos_list[i][0])
                 i += 1
-        elif token in senti_lexicon:
-            antonym_word = get_antonyms(token)
-            if len(antonym_word) == 0:
-                antonym_word =  token
+        elif token in SENTI_LEXICONS: 
+            antonyms = set(get_antonyms(token)) | set(get_antonyms(lemmatized_token))
+            candidate = []
+            candidate.extend(antonyms)
+            valid_candidate = {word:WORD_STATS[word] for word in candidate if word in WORD_STATS}
+            antonym = ""
+            if len(valid_candidate) == 0:
+                antonym = sample_antonym(token, origin_label) # sample random antonym from lexicon 
             else:
-                antonym_word = antonym_word[0]
-            reversed_sent.append(antonym_word)
+                valid_candidate = sorted(valid_candidate.items(), key=lambda x: x[1],reverse=True)[0:5]
+                antonym = random.choice(valid_candidate)[0]
+            reversed_sent.append(antonym)
             i += 1
         else:
             reversed_sent.append(token)
@@ -186,70 +182,68 @@ def gen_reverse_sent(data, senti_lexicon):
 
 
 def gen_similiar_sent(data):    
-    import random 
     origin_label = data[0]
     origin_text = data[1]
     token_list = nltk.word_tokenize(origin_text)
-    per_token_list = nltk.pos_tag(token_list)
+    token_pos_list = nltk.pos_tag(token_list)
+    lemmatized_tokens = get_lemmatized_sent(origin_text)
+
+    similar_text = []
+    augment_action = [0, 1] #0. Not change #1.change  
     
-    transformed_text = []
-    transformed_label = origin_label
-    
-    for token, tag in per_token_list:
-        tag = penn_to_wn(tag)
+    for idx, (token, tag) in enumerate(token_pos_list):
+        lemma_token = lemmatized_tokens[idx]
         if token in STOP_WORDS:
-            transformed_text.append(token)
             continue
-
-        rand_val = random.random()
-        if rand_val <= 0.5:
-            tokens = get_synonyms(token)
-        else:
-            tokens = get_synonyms(token)
-        
-        token = random.choice(tokens)
-        transformed_text.append(token)
-            
-    transformed_text = ' '.join(transformed_text)
-    return transformed_label, transformed_text
+        action = random.choice(augment_action)
+        if action == 0: # Noy change
+            similar_text.append(token)
+        else: # Change 
+            action = random.random()
+            if action > 0.5: # synonym
+                candidate = get_synonyms(token, tag) + get_synonyms(lemma_token, tag)
+                valid_candidate = set(candidate) & set(WORD_STATS)
+                valid_candidate = {word:WORD_STATS[word] for word in valid_candidate}
+                valid_candidate = sorted(valid_candidate.items(), key=lambda x: x[1],reverse=True)[0:10]
+                if len(valid_candidate) == 0:
+                    similar_text.append(token)
+                    continue
+                synonym = random.choice(valid_candidate)[0]
+                similar_text.append(synonym)
+            else: # hypernym or hyponym
+                candidate = []
+                candidate.extend(get_hypernyms(token, tag))
+                candidate.extend(get_hypernyms(lemma_token, tag))
+                candidate.extend(get_hyponyms(token, tag))
+                candidate.extend(get_hyponyms(lemma_token, tag))
+                valid_candidate = set(candidate) & set(WORD_STATS)
+                valid_candidate = {word:WORD_STATS[word] for word in valid_candidate}
+                valid_candidate = sorted(valid_candidate.items(), key=lambda x: x[1], reverse=True)[0:10]
+                if len(valid_candidate) == 0: 
+                    similar_text.append(token)
+                    continue
+                hypword = random.choice(valid_candidate)[0]
+                similar_text.append(hypword)
+    similar_text = ' '.join(similar_text)
+    return origin_label, similar_text
     
+    
+if __name__ == '__main__':
+    # load dataset
+    origin_dataset = 'temp_dataset.txt'  
+    dataset = get_pair_dataset(origin_dataset)
 
-def get_senti_lexicon():
-    # sentiword_lexicon
-    sentiword_lexicon = swn.all_senti_synsets()
-
-    # opinion_lexicon
-    from nltk.corpus import opinion_lexicon
-    opinion_lexicon = opinion_lexicon.words()
-
-    # vader_lexicon
-    from nltk.sentiment.vader import SentimentIntensityAnalyzer
-    sentiment_analyzer = SentimentIntensityAnalyzer()
-    vader_lexicon = sentiment_analyzer.lexicon
-    vader_lexicon = list(vader_lexicon.keys())
-
-    # Merge lexicon
-    senti_lexicon = set(opinion_lexicon) | set(vader_lexicon)
-    return senti_lexicon
-
-
-# load dataset
-origin_dataset = 'sst2_train_500.txt'  
-dataset = get_pair_dataset(origin_dataset)
-
-with open('augmented_' + origin_dataset,'w') as fw:
-    for idx, data in enumerate(dataset):
-        origin_label, origin_text = data[0], data[1]
-        reverse_label, reverse_text = gen_reverse_sent(data, get_senti_lexicon())
-        similar_label, similar_text = gen_similiar_sent(data)
-        
-        origin = origin_text + '\t ' + str(origin_label) +'\n'
-        similar = similar_text + '\t ' + str(similar_label) +'\n'
-        reverse = reverse_text + '\t ' +  str(reverse_label) +'\n'
-        
-        if origin_text == reverse_text:
-            continue
-        
-        fw.write(origin)
-        fw.write(similar)
-        fw.write(reverse)
+    with open('augmented_' + origin_dataset,'w') as fw:
+        for idx, data in enumerate(dataset):
+            origin_label, origin_text = data[0], data[1]
+            reverse_label, reverse_text = gen_reverse_sent(data)
+            similar_label, similar_text = gen_similiar_sent(data)
+            
+            print('origin_text:', origin_text)            
+            print('similar_text:', similar_text)
+            print('reverse_text:', reverse_text)
+            print()
+            origin = origin_text + '\t ' + str(origin_label) +'\n'
+            similar = similar_text + '\t ' + str(similar_label) +'\n'
+            reverse = reverse_text + '\t ' +  str(reverse_label) +'\n'
+            
