@@ -194,6 +194,7 @@ def gen_similiar_sent(data):
     for idx, (token, tag) in enumerate(token_pos_list):
         lemma_token = lemmatized_tokens[idx]
         if token in STOP_WORDS:
+            similar_text.append(token)
             continue
         action = random.choice(augment_action)
         if action == 0: # Noy change
@@ -239,11 +240,23 @@ if __name__ == '__main__':
             reverse_label, reverse_text = gen_reverse_sent(data)
             similar_label, similar_text = gen_similiar_sent(data)
             
-            print('origin_text:', origin_text)            
-            print('similar_text:', similar_text)
-            print('reverse_text:', reverse_text)
-            print()
-            origin = origin_text + '\t ' + str(origin_label) +'\n'
-            similar = similar_text + '\t ' + str(similar_label) +'\n'
-            reverse = reverse_text + '\t ' +  str(reverse_label) +'\n'
+            origin_text = origin_text.strip()
+            reverse_text = reverse_text.strip()
+            similar_text = similar_text.strip()
             
+            origin = origin_text + '\t ' + str(origin_label)
+            similar = similar_text + '\t ' + str(similar_label)
+            reverse = reverse_text + '\t ' +  str(reverse_label)
+            
+            if reverse_text == origin_text and similar_text != origin_text:
+                fw.write(origin +'\n')
+                fw.write(similar + '\n')
+            elif similar_text == origin_text and reverse_text != origin_text:
+                fw.write(origin +'\n')
+                fw.write(reverse +'\n')
+            elif reverse_text == similar_text:
+                fw.write(origin +'\n')
+            else: 
+                fw.write(origin +'\n')
+                fw.write(similar + '\n')
+                fw.write(reverse +'\n')

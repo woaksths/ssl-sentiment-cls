@@ -36,4 +36,3 @@ STOP_WORDS = ['i', 'me', 'my', 'myself', 'we', 'our',
 
 WORD_STATS = get_word_statistics('dataset/pros_cons/total_dataset.txt')
 POS_LEXICONS, NEG_LEXICONS, SENTI_LEXICONS = get_senti_lexicon()
-
