@@ -14,6 +14,8 @@ class LSTM(nn.Module):
             self.embedding.weight = nn.Parameter(embedding)
         
         self.variable_lengths= variable_lengths
+        
+        # embedding
         self.embedding.weight.requires_grad = update_embedding
         self.max_len = max_len
         self.hidden_size = hidden_size
@@ -33,13 +35,12 @@ class LSTM(nn.Module):
         merged_state = merged_state.unsqueeze(2) # (batch_size, hidden_dim*2, 1)
         
         attn = torch.bmm(outputs, merged_state) #batch_size, #seq_len, # 1
-        attn = torch.nn.functional.softmax(attn.squeeze(2)).unsqueeze(2) #batch_size, # seq_len, #1
+        attn = torch.nn.functional.softmax(attn.squeeze(2), dim=-1).unsqueeze(2) #batch_size, # seq_len, #1
         c_t = torch.bmm(torch.transpose(outputs, 1,2), attn).squeeze(2) # batch_size, hidden_dim*2
         return c_t, attn
     
         
-    def forward(self, input_var, input_lengths):
-        
+    def forward(self, input_var, input_lengths):        
         embedded = self.embedding(input_var)
         embedded = self.input_dropout(embedded)
         
@@ -53,5 +54,5 @@ class LSTM(nn.Module):
         
         c_t, attn = self.attention(output, final_hidden_state)
         logits = self.classifier(c_t)
-        logits = F.tanh(logits)
+#         logits = F.tanh(logits)
         return logits, attn

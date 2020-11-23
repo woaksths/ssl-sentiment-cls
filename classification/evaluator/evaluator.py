@@ -29,7 +29,6 @@ class Evaluator(object):
         """
         model.eval()
         loss = self.loss
-#         loss.reset()
         match = 0
         total = 0
 
@@ -37,7 +36,7 @@ class Evaluator(object):
         batch_iterator = torchtext.data.BucketIterator(
             dataset=data, batch_size=self.batch_size,
             sort=True, sort_key=lambda x: len(x.text),
-            device=device, train=False, repeat=False)
+            device=device, train=False, repeat=False, shuffle=True)
         
         acc_loss = 0
         idx = 0
@@ -58,7 +57,8 @@ class Evaluator(object):
                 match += correct
                 total += logits.size()[0]
                 idx += 1
-                
+        
+        # check 
         if total == 0:
             accuracy = float('nan')
         else:            
