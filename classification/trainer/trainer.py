@@ -11,6 +11,7 @@ from torch import optim
 import torch.nn.functional as F
 from optim import Optimizer
 from evaluator import Evaluator
+from util.vocab import itos
 from util.checkpoint import Checkpoint
 
 class Trainer(object):
@@ -42,26 +43,24 @@ class Trainer(object):
         if not os.path.exists(self.expt_dir):
             os.makedirs(self.expt_dir)
         self.batch_size = batch_size
-
+        self.input_vocab = None
         self.logger = logging.getLogger(__name__)
 
     def _train_batch(self, input_variable, input_lengths, target_label, model):
         loss = self.loss
-
+        model.zero_grad()        
         # Forward propagation
         logits, attn = model(input_variable, input_lengths)
         logits = F.softmax(logits, dim=-1)        
         prob, indice= logits.max(1)
-        
+
         # Get loss
         #loss.reset()
+        #self.optimizer.optimizer.zero_grad()
         loss = loss(logits, target_label)
-        
         # Backward propagation
-        model.zero_grad()
         loss.backward()
         self.optimizer.step()
-        
         return loss
 
     def _train_epoches(self, data, model, n_epochs,
@@ -100,7 +99,6 @@ class Trainer(object):
 
                 input_variables, input_lengths = getattr(batch, 'text')
                 target_variables = getattr(batch, 'label')
-                
                 loss = self._train_batch(input_variables, input_lengths.tolist(), 
                                          target_variables, model)
                 
@@ -130,8 +128,9 @@ class Trainer(object):
             epoch_loss_total = 0
             log_msg = "Finished epoch %d: Train %s: %.4f" % (epoch, self.loss.name, epoch_loss_avg)
             if dev_data is not None:
+                model.eval()
                 dev_loss, accuracy = self.evaluator.evaluate(model, dev_data)
-                self.optimizer.update(dev_loss, epoch)
+#                 self.optimizer.update(dev_loss, epoch)
                 
                 if accuracy > best_accuracy:
                     best_accuracy = accuracy
@@ -186,7 +185,8 @@ class Trainer(object):
             if optimizer is None:
                 optimizer = Optimizer(optim.Adam(model.parameters()), max_grad_norm=5)
             self.optimizer = optimizer
-
+        
+        self.input_vocab = data.fields['text'].vocab
         self.logger.info("Optimizer: %s, Scheduler: %s" % (self.optimizer.optimizer, self.optimizer.scheduler))
         self._train_epoches(data, model, num_epochs,
                             start_epoch, step, dev_data=dev_data)
