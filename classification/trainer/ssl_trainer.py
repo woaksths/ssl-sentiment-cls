@@ -53,7 +53,6 @@ class SSLTrainer(object):
         
         self.logger = logging.getLogger(__name__)
 
-
         
     def update_dataset(self, labeled_dataset):
         print('*'*100)
@@ -88,7 +87,30 @@ class SSLTrainer(object):
             for text, label in labeled_result:
                 fw.write(text +'\t' + str(label) +'\n')
 
-                
+    
+    
+    def condition1():
+        # 문장에 반전 표현과 negator가 없고, 오로지 하나의 lexicon class에 들어가는 단어들로만 구성되어있는 경우.
+        # 논란의 여지가 없음 --> lexicon 클래스 레이블과 모델의 예측한 레이블이 서로 다를 경우에는  
+        # --> lexicon이 알려주는 방향으로 밀고감 
+        pass
+    
+    
+    
+    def condition2():
+        # 문장에 존재하는 lexicon 개수로 따지기엔 반전 표현이 있어서 한계가 있음 
+        # 모델이 예측한 레이블이 맞는지 검증하기 위해서... 
+        # 
+        # 문장에 속해있는 단어들이 pos, neg의 class에 속한 lexicon이 포함되어있고, 
+        
+        pass
+
+    
+    def condition3():
+        pass
+    
+    
+    
     def pseudo_labeling(self, text_list, probs, indices):
         pseudo_labels = []
         for idx, (text, label, prob) in enumerate(zip(text_list, indices, probs)):
@@ -98,7 +120,7 @@ class SSLTrainer(object):
                 pseudo_labels.append((text, int(label)))
         return pseudo_labels
 
-        
+    
     def train(self, num_epochs=30, dev_data=None):
         log = self.logger
         device = torch.device('cuda:0') if torch.cuda.is_available() else -1
