@@ -1,20 +1,3 @@
-# 1. sentiword 구성 방법 -> 1. opinion_lexicion(positive, negative)  2. vader_lexicon 3. sentiwordNet 
-    # opinion_lexicon + vader_lexicon  
-    # well defined 된 lexicon 추가 관련 고민 
-    # lexicon 구성 시에 pos, neg lexicon 별도로 합치는 것을 원칙으로
-
-# 2. reversed doc 구하는 logic (pos tag 사용)
-    # Issue1. reversed doc 구할 때, origin doc과 완전 일치하는 문제 
-    # Issue2. 학습 데이터 내에 위 단어에 대응하는 antynom을 구하지 못했다면,학습 데이터 내 존재하는 단어중에 임의의 부정의 단어로 random replacement 작업을 진행
-
-# 3. WordNet 치환 operation 1. unchaged 2. synonyms 3. hyponyms 4. hypernyms 5. antonyms(if 문장에 sentiword 존재)        
-
-# 4. perturbed samples-meta learning
-
-# 5. binary classification 방법 이외의 다중 분류 문제에 접근 (If possible) 
-    # attention을 통해 사전을 구축하고, 
-    # 사전에 매칭되는 단어들을 다른 클래스의 단어로 바꾸고, 레이블도 해당 클래스의 레이블로 바꾸는 방법 관련     
-
 from nltk.corpus import wordnet as wn
 from nltk.corpus import sentiwordnet as swn
 import nltk
@@ -22,12 +5,7 @@ from augmentation.lexicon_utils import get_pair_dataset, get_word_statistics, ge
 from augmentation.lexicon_config import NEGATOR, CONTRAST, END_WORDS, STOP_WORDS, WORD_STATS, POS_LEXICONS, NEG_LEXICONS, SENTI_LEXICONS 
 from nltk.stem import WordNetLemmatizer
 import random
-
-
-def tokenize_and_tag(sent):
-    token_list = nltk.word_tokenize(sent)
-    term_pos_list = nltk.pos_tag(token_list)
-    return term_pos_list
+import argparse
 
 
 def get_wn_params(word_pos):
@@ -52,7 +30,7 @@ def penn_to_wn(tag):
         return wn.ADV
     elif tag.startswith('V'):
         return wn.VERB
-    return None
+    return [wn.ADJ, wn.ADJ_SAT, wn.NOUN, wn.ADV, wn.VERB]
 
 
 def get_wordnet_pos(word):
@@ -63,6 +41,41 @@ def get_wordnet_pos(word):
                 "V": wn.VERB,
                 "R": wn.ADV}
     return tag_dict.get(tag, wn.NOUN)
+
+
+def tokenize_and_tag(sent):
+    sent_temp = []
+    negator_temp = []
+    
+    for token in sent.split(' '):
+        if token in NEGATOR:
+            sent_temp.append('#')
+            negator_temp.append(token)
+        else:
+            sent_temp.append(token)    
+    
+    sent_temp = ' '.join(sent_temp)
+    tokens = nltk.word_tokenize(sent_temp)
+    token_pos_list = nltk.pos_tag(tokens)
+    
+    if len(negator_temp) > 0:
+        for neg_tok in negator_temp:
+            for idx, (tok, pos) in enumerate(token_pos_list):
+                if tok == '#':
+                    token_pos_list[idx] =(neg_tok, 'NEGATOR')
+                    break
+    
+    lemmatized_tokens = get_lemmatized_sent(sent_temp)
+
+    if len(negator_temp) >0:
+        for neg_tok in negator_temp:
+            for idx ,tok in enumerate(lemmatized_tokens):
+                if tok == '#':
+                    lemmatized_tokens[idx] = neg_tok
+                    break
+    
+    assert len(token_pos_list) == len(lemmatized_tokens)
+    return token_pos_list, lemmatized_tokens
 
 
 def get_lemmatized_sent(sent):
@@ -129,28 +142,20 @@ def sample_antonym(token, origin_label):
     result = ''
     if origin_label == 0:
         # sample from intersection btw positive lexicons and traning dataset
-        intersection = POS_LEXICONS & set(WORD_STATS)
-        intersection = {word: WORD_STATS[word] for word in intersection}
-        intersection = sorted(intersection.items(), key=lambda x: x[1],reverse=True)
-        intersection = list(intersection)[0:50]
-        result = random.choice(intersection)[0]
+        result = random.choice(list(POS_LEXICONS))
     else:
         # sample from intersection btw positive lexicons and training dataset 
-        intersection = NEG_LEXICONS & set(WORD_STATS)
-        intersection = {word: WORD_STATS[word] for word in intersection}
-        intersection = sorted(intersection.items(), key=lambda x: x[1],reverse=True)
-        intersection = list(intersection)[0:50]
-        result = random.choice(intersection)[0]
+        result = random.choice(list(NEG_LEXICONS))
     return result
 
 
 def gen_reverse_sent(data):
     origin_label = data[0]
-    origin_text = data[1]
+    origin_text = data[1].lower()
+    
     reversed_sent = []
     reversed_label = 1 - int(origin_label)
-    token_pos_list = tokenize_and_tag(origin_text)
-    lemmatized_tokens = get_lemmatized_sent(origin_text)
+    token_pos_list, lemmatized_tokens = tokenize_and_tag(origin_text)
     i = 0
     while i != len(token_pos_list):
         token = token_pos_list[i][0].lower()
@@ -161,17 +166,15 @@ def gen_reverse_sent(data):
             while i != len(token_pos_list) and token_pos_list[i][0] not in END_WORDS and token_pos_list[i][0] not in NEGATOR:
                 reversed_sent.append(token_pos_list[i][0])
                 i += 1
-        elif token in SENTI_LEXICONS: 
+        elif token in SENTI_LEXICONS: #SENTI_LEXICON 재정의 필요 
             antonyms = set(get_antonyms(token)) | set(get_antonyms(lemmatized_token))
             candidate = []
             candidate.extend(antonyms)
-            valid_candidate = {word:WORD_STATS[word] for word in candidate if word in WORD_STATS}
             antonym = ""
-            if len(valid_candidate) == 0:
+            if len(candidate) == 0:
                 antonym = sample_antonym(token, origin_label) # sample random antonym from lexicon 
             else:
-                valid_candidate = sorted(valid_candidate.items(), key=lambda x: x[1],reverse=True)[0:5]
-                antonym = random.choice(valid_candidate)[0]
+                antonym = random.choice(candidate)
             reversed_sent.append(antonym)
             i += 1
         else:
@@ -181,15 +184,36 @@ def gen_reverse_sent(data):
     return reversed_label, reversed_sent
 
 
+
+def synonym_replacement(words, n): 
+    # code from eda paper
+    new_words = words.copy()
+    random_word_list = list(set([word for word in words if word not in STOP_WORDS]))
+    random.shuffle(random_word_list)
+    num_replaced = 0
+    for random_word in random_word_list:
+        synonyms = get_synonyms(random_word, '')
+        if len(synonyms) >= 1:
+            synonym = random.choice(list(synonyms))
+            new_words = [synonym if word == random_word else word for word in new_words]
+            #print("replaced", random_word, "with", synonym)
+            num_replaced += 1
+        if num_replaced >= n: #only replace up to n words
+            break
+    #this is stupid but we need it, trust me
+    sentence = ' '.join(new_words)
+    new_words = sentence.split(' ')
+    return new_words
+
+
+
 def gen_similiar_sent(data):    
     origin_label = data[0]
-    origin_text = data[1]
-    token_list = nltk.word_tokenize(origin_text)
-    token_pos_list = nltk.pos_tag(token_list)
-    lemmatized_tokens = get_lemmatized_sent(origin_text)
+    origin_text = data[1].lower()
+    token_pos_list, lemmatized_tokens = tokenize_and_tag(origin_text)
 
     similar_text = []
-    augment_action = [0, 1] #0. Not change #1.change  
+    augment_action = [0, 1] #0.Not change #1.change  
     
     for idx, (token, tag) in enumerate(token_pos_list):
         lemma_token = lemmatized_tokens[idx]
@@ -197,19 +221,17 @@ def gen_similiar_sent(data):
             similar_text.append(token)
             continue
         action = random.choice(augment_action)
-        if action == 0: # Noy change
+        if action != 0: # Not change
             similar_text.append(token)
         else: # Change 
             action = random.random()
             if action > 0.5: # synonym
                 candidate = get_synonyms(token, tag) + get_synonyms(lemma_token, tag)
-                valid_candidate = set(candidate) & set(WORD_STATS)
-                valid_candidate = {word:WORD_STATS[word] for word in valid_candidate}
-                valid_candidate = sorted(valid_candidate.items(), key=lambda x: x[1],reverse=True)[0:10]
-                if len(valid_candidate) == 0:
+                candidate = list(set(candidate))
+                if len(candidate) == 0:
                     similar_text.append(token)
                     continue
-                synonym = random.choice(valid_candidate)[0]
+                synonym = random.choice(candidate)
                 similar_text.append(synonym)
             else: # hypernym or hyponym
                 candidate = []
@@ -217,46 +239,76 @@ def gen_similiar_sent(data):
                 candidate.extend(get_hypernyms(lemma_token, tag))
                 candidate.extend(get_hyponyms(token, tag))
                 candidate.extend(get_hyponyms(lemma_token, tag))
-                valid_candidate = set(candidate) & set(WORD_STATS)
-                valid_candidate = {word:WORD_STATS[word] for word in valid_candidate}
-                valid_candidate = sorted(valid_candidate.items(), key=lambda x: x[1], reverse=True)[0:10]
-                if len(valid_candidate) == 0: 
+                candidate = list(set(candidate))
+                if len(candidate) == 0: 
                     similar_text.append(token)
                     continue
-                hypword = random.choice(valid_candidate)[0]
+                hypword = random.choice(candidate)
                 similar_text.append(hypword)
     similar_text = ' '.join(similar_text)
     return origin_label, similar_text
     
     
-if __name__ == '__main__':
+if __name__ == '__main__':    
     # load dataset
-    origin_dataset = 'temp_dataset.txt'  
-    dataset = get_pair_dataset(origin_dataset)
-
-    with open('augmented_' + origin_dataset,'w') as fw:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--file_name', action='store', dest='file_name', help='Path to file_name ') 
+    parser.add_argument('--type', action='store', dest='type', help='augment type')
+    opt = parser.parse_args()
+   
+    file_name = opt.file_name
+    new_file_name = '/'.join(file_name.split('/')[:-1]) + '/augmented_{}_'.format(opt.type)+file_name.split('/')[-1]
+    dataset = get_pair_dataset(file_name)
+    alpha_sr = [0.1, 0.2, 0.3]
+    
+    with open(new_file_name,'w') as fw:
         for idx, data in enumerate(dataset):
             origin_label, origin_text = data[0], data[1]
+            origin_text, lemmatized_tokens = tokenize_and_tag(origin_text.lower())
+            origin_text = ' '.join([val[0] for val in origin_text])
+            
+            # reverse dataset
             reverse_label, reverse_text = gen_reverse_sent(data)
-            similar_label, similar_text = gen_similiar_sent(data)
+            
+            # similar dataset
+            # similar_label, similar_text = gen_similiar_sent(data)
+            alpha = random.choice(alpha_sr)
+            n_sr = max(1, int(alpha* len(origin_text.split(' '))))
+            similar_text = synonym_replacement(origin_text.split(' '), n_sr)
+            similar_text = ' '.join(similar_text)
             
             origin_text = origin_text.strip()
             reverse_text = reverse_text.strip()
             similar_text = similar_text.strip()
             
-            origin = origin_text + '\t ' + str(origin_label)
-            similar = similar_text + '\t ' + str(similar_label)
-            reverse = reverse_text + '\t ' +  str(reverse_label)
+            origin = str(origin_label) + '\t' + origin_text
+            similar = str(origin_label) + '\t' + similar_text
+            reverse = str(reverse_label) + '\t' +  reverse_text
             
-            if reverse_text == origin_text and similar_text != origin_text:
+            if opt.type == 'sym':
+                if origin_text == similar_text:
+                    fw.write(origin+'\n')
+                else:
+                    fw.write(origin +'\n')
+                    fw.write(similar+'\n')
+            elif opt.type == 'ant':
+                if origin_text == reverse_text:
+                    fw.write(origin +'\n')
+                else:
+                    fw.write(origin +'\n')
+                    fw.write(reverse +'\n')
+            elif opt.type == 'all':            
+                if reverse_text == origin_text and similar_text != origin_text:
+                    fw.write(origin +'\n')
+                    fw.write(similar + '\n')
+                elif similar_text == origin_text and reverse_text != origin_text:
+                    fw.write(origin +'\n')
+                    fw.write(reverse +'\n')
+                elif reverse_text == similar_text:
+                    fw.write(origin +'\n')
+                else: 
+                    fw.write(origin +'\n')
+                    fw.write(similar + '\n')
+                    fw.write(reverse +'\n')
+            elif opt.type == 'origin':
                 fw.write(origin +'\n')
-                fw.write(similar + '\n')
-            elif similar_text == origin_text and reverse_text != origin_text:
-                fw.write(origin +'\n')
-                fw.write(reverse +'\n')
-            elif reverse_text == similar_text:
-                fw.write(origin +'\n')
-            else: 
-                fw.write(origin +'\n')
-                fw.write(similar + '\n')
-                fw.write(reverse +'\n')

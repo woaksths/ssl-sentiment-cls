@@ -11,7 +11,7 @@ from torch import optim
 import torch.nn.functional as F
 from optim import Optimizer
 from evaluator import Evaluator
-from util.vocab import itos
+from util.vocab import itos, extract_lexicon, merge_lexicon
 from util.checkpoint import Checkpoint
 
 class Trainer(object):
@@ -45,15 +45,18 @@ class Trainer(object):
         self.batch_size = batch_size
         self.input_vocab = None
         self.logger = logging.getLogger(__name__)
+        self.lexicon_stats = {0:{}, 1:{}}
 
+        
     def _train_batch(self, input_variable, input_lengths, target_label, model):
         loss = self.loss
         model.zero_grad()        
         # Forward propagation
         logits, attn = model(input_variable, input_lengths)
+        lexicon = extract_lexicon(self.input_vocab, input_variable, target_label, attn.squeeze(-1))        
+        self.lexicon_stats = merge_lexicon(self.lexicon_stats, lexicon)
         logits = F.softmax(logits, dim=-1)        
         prob, indice= logits.max(1)
-
         # Get loss
         #loss.reset()
         #self.optimizer.optimizer.zero_grad()
@@ -146,7 +149,8 @@ class Trainer(object):
                 self.optimizer.update(epoch_loss_avg, epoch)
 
             log.info(log_msg)
-
+            
+        
     def train(self, model, data, num_epochs=5,
               resume=False, dev_data=None, optimizer=None):
         """ Run training for a given model.

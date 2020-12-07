@@ -99,11 +99,11 @@ if torch.cuda.is_available():
     criterion.cuda()
 
 # Train supervised model
-t = Trainer(loss=criterion, batch_size=16,
+t = Trainer(loss=criterion, batch_size=4,
             checkpoint_every=300, print_every=100,
-            expt_dir=opt.expt_dir)
+            expt_dir=opt.expt_dir +'/supervised')
 
-model = t.train(model, train_data, num_epochs=30,
+model = t.train(model, train_data, num_epochs=40,
                 dev_data=valid_data, optimizer=optimizer)
 
 # Train semi-supervised model(pseudo-labeling-way)
@@ -113,5 +113,5 @@ if opt.is_ssl_train == True:
                              expt_dir=opt.expt_dir + '/SSL', 
                              labeled_data= train_data, unlabeled_data=unlabeled_data,
                              text_field=TEXT, label_field=LABEL)
-    ssl_trainer.train(num_epochs=50, dev_data=valid_data)
+    ssl_trainer.train(num_epochs=20, dev_data=valid_data)
     

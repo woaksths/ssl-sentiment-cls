@@ -35,6 +35,8 @@ class LSTM(nn.Module):
         merged_state = merged_state.unsqueeze(2) # (batch_size, hidden_dim*2, 1)
         
         attn = torch.bmm(outputs, merged_state) #batch_size, #seq_len, # 1
+
+        # NEED ATTENTION MASKING
         attn = torch.nn.functional.softmax(attn.squeeze(2), dim=-1).unsqueeze(2) #batch_size, # seq_len, #1
         c_t = torch.bmm(torch.transpose(outputs, 1,2), attn).squeeze(2) # batch_size, hidden_dim*2
         return c_t, attn
