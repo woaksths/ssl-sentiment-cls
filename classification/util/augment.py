@@ -1,11 +1,12 @@
 from nltk.corpus import wordnet as wn
 from nltk.corpus import sentiwordnet as swn
 import nltk
-from augmentation.lexicon_utils import get_pair_dataset, get_word_statistics, get_senti_lexicon
-from augmentation.lexicon_config import NEGATOR, CONTRAST, END_WORDS, STOP_WORDS, WORD_STATS, POS_LEXICONS, NEG_LEXICONS, SENTI_LEXICONS 
 from nltk.stem import WordNetLemmatizer
 import random
 import argparse
+from .lexicon_config import *
+from .lexicon_utils import *
+
 
 
 def get_wn_params(word_pos):
@@ -101,10 +102,11 @@ def get_synonyms(origin_word, tag):
     synonyms = set()
     tag_list = penn_to_wn(tag)
     for syn in wn.synsets(origin_word):
-        for term in syn.lemmas():
-            term = term.name().replace("_", " ").replace("-"," ").lower()
-            term = "".join([char for char in term if char in ' qwertyuiopasdfghjklzxcvbnm'])
-            synonyms.add(term)
+        if syn.pos() in tag_list:
+            for term in syn.lemmas():
+                term = term.name().replace("_", " ").replace("-"," ").lower()
+                term = "".join([char for char in term if char in ' qwertyuiopasdfghjklzxcvbnm'])
+                synonyms.add(term)
     if origin_word in synonyms:
         synonyms.remove(origin_word)
     return list(synonyms)
@@ -202,8 +204,7 @@ def synonym_replacement(words, n):
             break
     #this is stupid but we need it, trust me
     sentence = ' '.join(new_words)
-    new_words = sentence.split(' ')
-    return new_words
+    return sentence
 
 
 
@@ -248,67 +249,43 @@ def gen_similiar_sent(data):
     similar_text = ' '.join(similar_text)
     return origin_label, similar_text
     
+
+
+# if __name__ == '__main__':
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument('--file_name', action='store', dest='file_name', help='Path to file_name ') 
+#     parser.add_argument('--type', action='store', dest='type', help='augment type')
+#     opt = parser.parse_args()
+
+#     file_name = opt.file_name
+#     new_file_name = '/'.join(file_name.split('/')[:-1]) + '/augmented_{}_'.format(opt.type)+file_name.split('/')[-1]
+#     dataset = get_pair_dataset(file_name)
+#     alpha_sr = [0.1, 0.2, 0.3]
     
-if __name__ == '__main__':    
-    # load dataset
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--file_name', action='store', dest='file_name', help='Path to file_name ') 
-    parser.add_argument('--type', action='store', dest='type', help='augment type')
-    opt = parser.parse_args()
-   
-    file_name = opt.file_name
-    new_file_name = '/'.join(file_name.split('/')[:-1]) + '/augmented_{}_'.format(opt.type)+file_name.split('/')[-1]
-    dataset = get_pair_dataset(file_name)
-    alpha_sr = [0.1, 0.2, 0.3]
-    
-    with open(new_file_name,'w') as fw:
-        for idx, data in enumerate(dataset):
-            origin_label, origin_text = data[0], data[1]
-            origin_text, lemmatized_tokens = tokenize_and_tag(origin_text.lower())
-            origin_text = ' '.join([val[0] for val in origin_text])
-            
-            # reverse dataset
-            reverse_label, reverse_text = gen_reverse_sent(data)
-            
-            # similar dataset
-            # similar_label, similar_text = gen_similiar_sent(data)
-            alpha = random.choice(alpha_sr)
-            n_sr = max(1, int(alpha* len(origin_text.split(' '))))
-            similar_text = synonym_replacement(origin_text.split(' '), n_sr)
-            similar_text = ' '.join(similar_text)
-            
-            origin_text = origin_text.strip()
-            reverse_text = reverse_text.strip()
-            similar_text = similar_text.strip()
-            
-            origin = str(origin_label) + '\t' + origin_text
-            similar = str(origin_label) + '\t' + similar_text
-            reverse = str(reverse_label) + '\t' +  reverse_text
-            
-            if opt.type == 'sym':
-                if origin_text == similar_text:
-                    fw.write(origin+'\n')
-                else:
-                    fw.write(origin +'\n')
-                    fw.write(similar+'\n')
-            elif opt.type == 'ant':
-                if origin_text == reverse_text:
-                    fw.write(origin +'\n')
-                else:
-                    fw.write(origin +'\n')
-                    fw.write(reverse +'\n')
-            elif opt.type == 'all':            
-                if reverse_text == origin_text and similar_text != origin_text:
-                    fw.write(origin +'\n')
-                    fw.write(similar + '\n')
-                elif similar_text == origin_text and reverse_text != origin_text:
-                    fw.write(origin +'\n')
-                    fw.write(reverse +'\n')
-                elif reverse_text == similar_text:
-                    fw.write(origin +'\n')
-                else: 
-                    fw.write(origin +'\n')
-                    fw.write(similar + '\n')
-                    fw.write(reverse +'\n')
-            elif opt.type == 'origin':
-                fw.write(origin +'\n')
+#     with open(new_file_name,'w') as fw:
+#         for idx, data in enumerate(dataset):
+#             origin_label, origin_text = data[0], data[1]
+#             origin_text, lemmatized_tokens = tokenize_and_tag(origin_text.lower())
+#             origin_text = ' '.join([val[0] for val in origin_text])
+
+#             # reverse dataset
+#             reverse_label, reverse_text = gen_reverse_sent(data)    
+#             # similar dataset
+#             # similar_label, similar_text = gen_similiar_sent(data)
+#             alpha = random.choice(alpha_sr)
+#             n_sr = max(1, int(alpha* len(origin_text.split(' '))))
+#             similar_text = synonym_replacement(origin_text.split(' '), n_sr)
+#             similar_text = ' '.join(similar_text)
+
+#             origin_text = origin_text.strip()
+#             reverse_text = reverse_text.strip()
+#             similar_text = similar_text.strip()
+
+#             print('origin', origin_text)
+#             print('reverse', reverse_text)
+#             print('similar', similar_text)
+#             1/0
+#             origin = str(origin_label) + '\t' + origin_text
+#             similar = str(origin_label) + '\t' + similar_text
+#             reverse = str(reverse_label) + '\t' +  reverse_text
+#             1/0

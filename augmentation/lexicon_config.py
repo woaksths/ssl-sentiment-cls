@@ -1,4 +1,4 @@
-from .lexicon_utils import get_senti_lexicon, get_word_statistics
+import lexicon_utils
 
 NEGATOR = {"aint", "arent","cannot","cant","couldnt","darent", "didnt","doesnt","ain't","aren't",
         "can't","couldn't","daren't","didn't", "doesn't","dont","hadnt", "hasnt","havent","isnt",
@@ -34,5 +34,5 @@ STOP_WORDS = ['i', 'me', 'my', 'myself', 'we', 'our',
 			'very', 's', 't', 'can', 'will', 'just', 'don', 
 			'should', 'now', '']
 
-WORD_STATS = get_word_statistics('dataset/pros_cons/total_dataset.txt')
-POS_LEXICONS, NEG_LEXICONS, SENTI_LEXICONS = get_senti_lexicon()
+# WORD_STATS = lexicon_utils.get_word_statistics('dataset/pros_cons/total_dataset.txt')
+POS_LEXICONS, NEG_LEXICONS, SENTI_LEXICONS =lexicon_utils.get_senti_lexicon()

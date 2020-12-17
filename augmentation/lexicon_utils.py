@@ -61,15 +61,15 @@ def get_senti_lexicon():
             vader_neg.add(d)
     
     # finance lexcion
-    finance_pos = get_lexicon('lexicons/finance_pos.txt')
-    finance_neg = get_lexicon('lexicons/finance_neg.txt')
+    finance_pos = get_lexicon('../lexicons/finance_pos.txt')
+    finance_neg = get_lexicon('../lexicons/finance_neg.txt')
         
     # hu-liu lexicon
-    hu_liu_pos = get_lexicon('lexicons/hu_liu_pos.txt')
-    hu_liu_neg = get_lexicon('lexicons/hu_liu_neg.txt')
+    hu_liu_pos = get_lexicon('../lexicons/hu_liu_pos.txt')
+    hu_liu_neg = get_lexicon('../lexicons/hu_liu_neg.txt')
     
     # harvard lexicon
-    harvard_neg = get_lexicon('lexicons/harvard_neg.txt')
+    harvard_neg = get_lexicon('../lexicons/harvard_neg.txt')
     
     pos_lexicon = set(opinion_pos) | vader_pos | finance_pos | hu_liu_pos
     neg_lexicon = set(opinion_neg) | vader_neg | finance_neg | hu_liu_neg | harvard_neg
