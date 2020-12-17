@@ -1,2 +1,2 @@
 
-from .lstm import LSTM
+from .lstm import LSTM, Classifier_Attention_LSTM
