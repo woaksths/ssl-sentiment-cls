@@ -19,7 +19,7 @@ from evaluator import Evaluator
 from util.checkpoint import Checkpoint
 from util.eda import *
 from util.dataset import *
-from util.dataset import get_golden_lexicons
+from util.dataset import get_golden_lexicons, get_annotated_word_tag
 
 parser = argparse.ArgumentParser()
 
@@ -76,6 +76,7 @@ LABEL = torchtext.data.Field(sequential=False, use_vocab=False, batch_first=True
 
 if not opt.is_ssl_train:  
     # load dataset
+    
     total_dataset = get_dataset(opt.train_path)
     test_dataset = get_dataset(opt.dev_path)
 
@@ -89,7 +90,7 @@ if not opt.is_ssl_train:
     # make initital dataset (train, dev, unlabeled)
     train_data, dev_data, unlabeled_data = sampling_initial_dataset(total_dataset, class_num, sample_num_per_class)
     augmented_train = gen_augmented_dataset(train_data, num_aug)
-    augmented_dev = gen_augmented_dataset(dev_data, num_aug)
+    augmented_dev = gen_augmented_dataset(dev_data, 0)
 
     write_sampled_dataset(sampled_dataset_dir +'/augmented_train.txt', augmented_train)
     write_sampled_dataset(sampled_dataset_dir +'/augmented_dev.txt', augmented_dev)
@@ -99,13 +100,13 @@ if not opt.is_ssl_train:
     
     # experiment1: augmented_train으로 했을 때와 아닐 때 
     train_data = augmented_train 
-    dev_data = augmented_dev
+    dev_data = augmented_dev    
 
     train_examples = examples_from_dataset(train_data, max_len)
     dev_examples = examples_from_dataset(dev_data, max_len)
     test_examples = examples_from_dataset(test_dataset,  max_len)
     unlabeled_examples = examples_from_dataset(unlabeled_data, max_len)
-    
+
     glove = GloVe(name='840B', dim=300)
     glove_example = glove_to_example(glove.stoi.keys())
     total_examples = train_examples + unlabeled_examples + dev_examples + [glove_example]
@@ -121,7 +122,7 @@ if not opt.is_ssl_train:
     hidden_size = 128 # or 128, 256
     model = LSTM(input_vocab.vectors, max_len, hidden_size,
                  variable_lengths=True, bidirectional=False)
-    # model = Classifier_Attention_LSTM(input_vocab.vectors, 2)
+#     model = Classifier_Attention_LSTM(input_vocab.vectors, 2)
 
     if torch.cuda.is_available():
         model.cuda()
@@ -140,12 +141,16 @@ if not opt.is_ssl_train:
         criterion.cuda()
 
     # Train supervised model
-    t = Trainer(loss=criterion, batch_size=64,
-                checkpoint_every=300, print_every=100,
+    t = Trainer(loss=criterion, batch_size=128,
+                checkpoint_every= 300, print_every=100,
                 expt_dir=opt.expt_dir +'/supervised', lexicon_dir = opt.lexicon_dir)
     model, lexicon = t.train(model, train_data, num_epochs=50,
                              dev_data=dev_data, optimizer=optimizer, test_data=test_data)
 
+    evaluator = Evaluator(loss=criterion, batch_size=64)
+    loss, accuracy = evaluator.evaluate(model, test_data)
+    print(model)
+    print('supervised model::: loss > {} accuracy{}'.format(loss, accuracy))
 else:
     assert opt.load_checkpoint is not None
     assert opt.unlabeled_data is not None 
@@ -153,12 +158,15 @@ else:
     assert opt.dev_data is not None
     assert opt.test_data is not None
     assert opt.annotated_lexicon is not None
-    
+
+    outputs_dir = opt.labeled_data.split('/')[0]
+
     # load sampled dataset and golden lexicon
     unlabeled_data = get_dataset(opt.unlabeled_data)
     labeled_data = get_dataset(opt.labeled_data)
     dev_data = get_dataset(opt.dev_data)
     test_data = get_dataset(opt.test_data)
+    
     
     labled_examples = examples_from_dataset(labeled_data, max_len)
     unlabeled_examples = examples_from_dataset(unlabeled_data, max_len)
@@ -169,7 +177,8 @@ else:
     unlabeled_dataset = torchtext.data.Dataset(unlabeled_examples, fields=[('text', TEXT), ('label', LABEL)])
     dev_dataset = torchtext.data.Dataset(dev_examples, fields=[('text', TEXT), ('label', LABEL)])
     test_dataset = torchtext.data.Dataset(test_examples, fields=[('text', TEXT), ('label', LABEL)])
-    golden_lexicons = get_golden_lexicons(opt.annotated_lexicon)
+#     golden_lexicons = get_golden_lexicons(opt.annotated_lexicon)
+    golden_lexicons = get_annotated_word_tag(opt.annotated_lexicon, class_num=2)
     
     # load best checkpoint 
     checkpoint = Checkpoint.get_latest_checkpoint(opt.load_checkpoint)
@@ -181,21 +190,25 @@ else:
     # config 
     criterion = nn.CrossEntropyLoss()
     optimizer = checkpoint.optimizer
+    resume_optim  = checkpoint.optimizer.optimizer
+    defaults = resume_optim.param_groups[0]
+    defaults.pop('params', None)
+    defaults.pop('initial_lr', None)
+    
+    optimizer.optimizer = resume_optim.__class__(model.parameters(), **defaults)
+    
     evaluator = Evaluator(loss=criterion, batch_size=64)
     loss, accuracy = evaluator.evaluate(checkpoint.model, test_dataset)
-    print('supervised model::: loss > {} accuracy{}'.format(loss, accuracy))
+    print(model)
     # labeled_dataset, unlabeled_dataset, dev_dataset, test_dataset, golden_lexicons
+    print('supervised model::: loss > {} accuracy{}'.format(loss, accuracy))
     
     # Train semi-supervised model(pseudo-labeling-way)
     ssl_trainer = SSLTrainer(model=model, loss=criterion, 
-                             batch_size=16, optimizer=optimizer, vocab=input_vocab,
-                             expt_dir=opt.expt_dir + '/SSL', golden_lexicons=golden_lexicons, 
+                             batch_size=16, optimizer=optimizer,
+                             vocab=input_vocab, expt_dir=opt.expt_dir + '/SSL', 
+                             outputs_dir = outputs_dir, annotated_lexicons=golden_lexicons, 
                              labeled_data= labeled_dataset, unlabeled_data=unlabeled_dataset,
                              text_field=TEXT, label_field=LABEL)
-    
-    print(ssl_trainer)
-    print(dir(ssl_trainer))
-    ssl_trainer.train(num_epochs=20, dev_data=dev_dataset, test_data=test_dataset)
+    ssl_trainer.train(num_epochs=40, dev_data=dev_dataset, test_data=test_dataset)
     1/0
-    
-    

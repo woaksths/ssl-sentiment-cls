@@ -2,6 +2,7 @@ import nltk
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
 from nltk.corpus import sentiwordnet as swn
+import os
 
 
 def get_word_statistics(file_name):
@@ -60,19 +61,20 @@ def get_senti_lexicon():
         elif  vader_lexicon[d] <= -0.5:
             vader_neg.add(d)
     
+    lexicon_path = '/'.join(os.getcwd().split('/')[:-1])
     # finance lexcion
-    finance_pos = get_lexicon('../lexicons/finance_pos.txt')
-    finance_neg = get_lexicon('../lexicons/finance_neg.txt')
+    finance_pos = get_lexicon(lexicon_path +'/lexicons/finance_pos.txt')
+    finance_neg = get_lexicon(lexicon_path +'/lexicons/finance_neg.txt')
         
     # hu-liu lexicon
-    hu_liu_pos = get_lexicon('../lexicons/hu_liu_pos.txt')
-    hu_liu_neg = get_lexicon('../lexicons/hu_liu_neg.txt')
+    hu_liu_pos = get_lexicon(lexicon_path +'/lexicons/hu_liu_pos.txt')
+    hu_liu_neg = get_lexicon(lexicon_path +'/lexicons/hu_liu_neg.txt')
     
     # harvard lexicon
-    harvard_neg = get_lexicon('../lexicons/harvard_neg.txt')
+    harvard_neg = get_lexicon(lexicon_path +'/lexicons/harvard_neg.txt')
     
-    pos_lexicon = set(opinion_pos) | vader_pos | finance_pos | hu_liu_pos
-    neg_lexicon = set(opinion_neg) | vader_neg | finance_neg | hu_liu_neg | harvard_neg
+    pos_lexicon = set(opinion_pos)  & hu_liu_pos
+    neg_lexicon = set(opinion_neg) &  hu_liu_neg 
     senti_lexicon = pos_lexicon | neg_lexicon
-    
-    return pos_lexicon, neg_lexicon, senti_lexicon
+    lexicon = {0:pos_lexicon, 1:neg_lexicon}
+    return lexicon

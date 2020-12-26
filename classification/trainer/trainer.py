@@ -128,7 +128,7 @@ class Trainer(object):
                     for word in intersection:
                         content = word + ' neg:{}, pos:{}'.format(neg_dict[word], pos_dict[word])
                         fw.write(content + '\n')
-        return intersection                 
+        return intersection
     
     
     def filter_common_word(self, common_words, lexicons, epoch):
@@ -153,19 +153,10 @@ class Trainer(object):
             for word in neg_dict:
                 fw.write(word +' :' +str(neg_dict[word]) + '\n')
 
-#         print('neg_dict', neg_dict)
-#         print('*'*100)
-#         print('pos_dict', pos_dict)
-#         print('\n\n')
 
     def filter_stoi(self):
-#         print(END_WORDS)
-#         print(STOP_WORDS)
-        print(dir(self.input_vocab))
         end_words_idx = [self.input_vocab.stoi[word] for word in END_WORDS]
         stop_words_idx = [self.input_vocab.stoi[word] for word in STOP_WORDS]
-#         print(end_words_idx)
-#         print(stop_words_idx)
         return list(set(end_words_idx+stop_words_idx))
         
     def _train_epoches(self, data, model, n_epochs,
