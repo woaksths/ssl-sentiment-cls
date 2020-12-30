@@ -8,10 +8,13 @@ import logging
 from util.vocab import itos, extract_lexicon, merge_lexicon, get_words_by_attn
 from util.lexicon_config import STOP_WORDS, END_WORDS, NEGATOR
 
+import time
+
 import torch.nn.functional as F
 from util.augment import augment_antonym_lexicons, gen_reverse_sent, gen_reverse_sent_with_lexicons
 from util.lexicon_utils import get_senti_lexicon
-
+from trainer.EarlyStopping import EarlyStopping
+from util.checkpoint import Checkpoint
 
 class SSLTrainer(object):
     def __init__(self, model=None, loss=None, batch_size=64, 
@@ -21,8 +24,8 @@ class SSLTrainer(object):
         
         self._trainer= "Semi supervised Trainer"
         self.model = model
-        self.loss = loss
-        self.evaluator = Evaluator(loss=self.loss, batch_size=batch_size)
+        self.criterion = loss
+        self.evaluator = Evaluator(loss=self.criterion, batch_size=batch_size)
         self.optimizer = optimizer
 
         if not os.path.isabs(expt_dir):
@@ -65,21 +68,27 @@ class SSLTrainer(object):
         self.matching_correct = 0
     
         self.device = None
-
+        
+        self.ssl_early_stopping = 0
+        self.ssl_early_stopping_patience = 10
         
     def save_labeled_result(self, path, labeled_result):
         with open(path, 'w') as fw:
             for text, label in labeled_result:
                 fw.write(str(label) +'\t' + text + '\n')
 
-                
 
     def update_dataset(self, labeled_dataset):
         print('INFO. # num of current training dataset', len(self.labeled_examples))
         print('INFO. # num of current unlabeled dataset', len(self.unlabeled_text))
         print('INFO. # num of new labeled dataset', len(labeled_dataset))
 #         print('INFO. # unlabeled dataset accuracy',self.matching_correct, self.matching_cnt ,float(self.matching_correct/self.matching_cnt))
-        print('INFO. # unlabeled dataset accuracy',self.matching_correct, self.matching_cnt)
+        print('INFO. # unlabeled dataset accuracy {}/{}'.format(self.matching_correct, self.matching_cnt))
+    
+        if len(labeled_dataset) == 0:
+            self.ssl_early_stopping +=1
+        else:
+            self.ssl_early_stopping = 0
         
         self.matching_correct = 0 
         self.matching_cnt = 0
@@ -99,9 +108,8 @@ class SSLTrainer(object):
                 self.labeled_examples.append(example)
                 new_labeled_examples.append(example)
             else:
-                print(text)
-                print(label)
                 1/0
+
         # update unlabeled examples
         unlabeled_examples = [torchtext.data.Example.fromlist((text, label),[('text', self.TEXT_field), ('label', self.LABEL_field)]) for (text, label) in zip(self.unlabeled_text, self.unlabeled_target)]
         self.unlabeled_examples = unlabeled_examples
@@ -184,8 +192,10 @@ class SSLTrainer(object):
     def balancing_labeled_result(self, labeled_dataset):
         label0 = []
         label1 = [] 
+        print('balancing')
         for text, label in labeled_dataset:
             label = int(label)
+#             print(label, type(label))
             if label == 0:
                 label0.append((text, label))
             else:
@@ -197,10 +207,12 @@ class SSLTrainer(object):
     
     def gen_reverse_examples(self, labeled_examples):
         reverse_labeled_dataset = []
+        print('*'*100)
+        print('GENERATE REVERSE EXAMPLE')
         for label_data in labeled_examples:
-            origin_label = int(label_data.label)
-            origin_text = ' '.join(label_data.text)
             
+            origin_label = label_data[1]
+            origin_text = label_data[0]
             reverse_label, reverse_text = gen_reverse_sent_with_lexicons((origin_label, origin_text), self.golden_lexicons)
             reverse_labeled_dataset.append((reverse_text ,reverse_label))
             
@@ -209,21 +221,120 @@ class SSLTrainer(object):
         
         
         
-    def train(self, num_epochs=30, dev_data=None, test_data=None):
+    def self_training_labeling(self, input_var, str_list, logits, attn, target_label):
+        pseudo_labels = []
+        logits = F.softmax(logits, dim=-1)
+        probs, indice = logits.max(1)
+        for text, label, prob, target in zip(str_list, indice, probs, target_label):
+            if prob >= 0.9:
+                self.matching_cnt += 1
+#                 print(label.item(), target.item(), type(label.item()), type(target.item()))
+                pseudo_labels.append((text, label.item()))
+                if label.item() == target.item():
+                    self.matching_correct +=1
+        return pseudo_labels
+        
+               
+    def _train_batch(self, input_variable, input_length, target_variable, model):
+        logits, attn = model(input_variable, input_length)
+        loss = self.criterion(logits, target_variable)
+        self.optimizer.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        return loss
+    
+
+    
+    def _train_epoches(self, data, model, n_epochs, dev_data=None, test_data=None):
+        labeled_dataset = torchtext.data.Dataset(data, fields=[('text', self.TEXT_field), ('label', self.LABEL_field)])
+        label_batch_iter = torchtext.data.BucketIterator(dataset=labeled_dataset, batch_size=128,
+                                                         sort_key=lambda x:len(x.text), sort_within_batch=True,
+                                                         device=self.device, repeat=False, shuffle=True)
+        log = self.logger
+        
+        early_stopping = EarlyStopping(patience =2, verbose=True)
+        best_accuracy = 0
+        
+        for epoch in range(0, n_epochs):
+            model.train()
+            loss_total = 0
+            step = 0
+            for batch in label_batch_iter:
+                input_variables, input_lengths = batch.text
+                target_variables = batch.label
+                loss = self._train_batch(input_variables, input_lengths.tolist(), target_variables, model)
+                loss_total += loss.item()
+                step +=1
+                del loss, batch
+                
+            epoch_loss_avg = loss_total / step
+            log_msg = "Finished epoch %d: SSL Train %s: %.4f" % (epoch , 'Cross_Entropy', epoch_loss_avg)
+            with torch.no_grad():
+                if dev_data is not None:
+                    model.eval()
+                    dev_loss, dev_acc = self.evaluator.evaluate(model, dev_data)
+                    self.dev_acc = dev_acc
+                    log_msg +=  ", Dev %s: %.4f, Accuracy: %.4f" % ('Cross_Entropy', dev_loss, dev_acc)
+                    log.info(log_msg)
+                    early_stopping(dev_loss, model, self.optimizer, epoch, step, self.input_vocab, self.expt_dir)
+                    print('early stopping : ', early_stopping.counter)
+                    if self.dev_acc > best_accuracy: ######################## dev_acc는 global한 best acc 변수로
+                        best_accuracy = self.dev_acc
+                        Checkpoint(model=model, optimizer= self.optimizer, 
+                                   epoch=epoch, step=step, input_vocab=self.input_vocab).save(self.expt_dir +'/best_accuracy')
+                        print('*'*100)
+                        print('SAVE MODEL (BEST DEV ACC)')
+
+                if test_data is not None:
+                    model.eval()
+                    test_loss, accuracy = self.evaluator.evaluate(model, test_data)
+                    log_msg +=  ", Test %s: %.4f, Accuracy: %.4f" % ('Cross_Entropy', test_loss, accuracy)
+                    log.info(log_msg)
+
+                if early_stopping.early_stop:
+                    print("-------------------Early Stopping---------------------")
+                    checkpoint = Checkpoint.get_latest_checkpoint(self.expt_dir + '/best_accuracy')
+                    checkpoint = Checkpoint.load(checkpoint)
+                    
+                    model = checkpoint.model ## deep copy
+                    for param_tensor in model.state_dict():
+                        print(param_tensor, '\t', model.state_dict()[param_tensor].size())
+                    
+                    # config 
+                    optimizer = checkpoint.optimizer
+                    resume_optim  = checkpoint.optimizer.optimizer
+                    
+                    del checkpoint
+                    
+                    defaults = resume_optim.param_groups[0]
+                    defaults.pop('params', None)
+                    defaults.pop('initial_lr', None)
+                    optimizer.optimizer = resume_optim.__class__(model.parameters(), **defaults)
+                    self.optimizer = optimizer
+                    loss, accuracy = self.evaluator.evaluate(model, test_data)
+                    print('LOAD BEST ACCURACY MODEL ::: loss > {} accuracy{}'.format(loss, accuracy))
+                    break
+        return model
+                
+                
+    def ssl_train(self, num_epochs=30, dev_data=None, test_data=None, methods=None, reverse_augment=False):
         log = self.logger
         self.device = torch.device('cuda:0') if torch.cuda.is_available() else -1
         model = self.model
-        self.best_dev_acc = 0
+        print('*'*100)
+        print('memory check')
+        time.sleep(5)
+        print(dir(model))
         
-        for epoch in range(num_epochs): 
-            print('INFO current epoch: ', epoch)
+        for epoch in range(num_epochs):
+            print('INFO. # current epoch:', epoch)
+
             # load updated unlabeled examples dataset
-            print('SSL train', len(self.unlabeled_examples))
             unlabeled_dataset = torchtext.data.Dataset(self.unlabeled_examples,
                                                        fields = [('text', self.TEXT_field), ('label', self.LABEL_field)])
             unlabel_batch_iter = torchtext.data.BucketIterator(dataset=unlabeled_dataset, batch_size=128,
                                                                sort_key=lambda x:len(x.text),  sort_within_batch=True,
-                                                               device=self.device, repeat=False, shuffle=True, train=False)
+                                                               device=self.device, repeat=False, shuffle=False, train=False)
             # predict unlabeled dataset
             labeled_samples = []
             
@@ -232,6 +343,7 @@ class SSLTrainer(object):
             reverse_batch_iter = None
             
             with torch.no_grad():
+                model.eval()
                 for idx, unlabel_batch in enumerate(unlabel_batch_iter):
                     str_list = itos(self.input_vocab, unlabel_batch.text[0])
                     str_list = [sent.replace('<pad>','').strip() for sent in str_list]
@@ -239,104 +351,30 @@ class SSLTrainer(object):
                     input_var = unlabel_batch.text[0]
                     input_len = unlabel_batch.text[1]
                     target_label = unlabel_batch.label
-                    
                     logits, attn = model(input_var, input_len.tolist())
                     
-                    labeled_dataset = self.pseudo_labeling(input_var, str_list, logits, attn, target_label)
+                    if methods == 'self-training':
+                        labeled_dataset = self.self_training_labeling(input_var, str_list, logits, attn, target_label)
+                    elif methods == 'pseudo-label':
+                        labeled_dataset = self.pseudo_labeling(input_var, str_list, logits, attn, target_label)
                     labeled_samples.extend(labeled_dataset)
-            
-            
+                    
             labeled_samples = list(set(labeled_samples))
-            balanced_dataset = self.balancing_labeled_result(labeled_samples)
-            print('INFO. # num of new balacned dataset from pseudo label result', len(balanced_dataset))
-            self.save_labeled_result(self.outputs_dir+'/pseudo_label_epoch_{}.txt'.format(str(epoch)), labeled_samples)
-            new_labeled_examples = self.update_dataset(labeled_samples)
             
+            if reverse_augment is False:
+                labeled_samples = self.balancing_labeled_result(labeled_samples)
+                print('INFO. # num of new balacned dataset from pseudo label result', len(labeled_samples))
+            else:
+                self.save_labeled_result(self.outputs_dir+'/pseudo_label_epoch_{}.txt'.format(str(epoch)), labeled_samples)
+                reversed_examples = self.gen_reverse_examples(labeled_samples)
+            self.update_dataset(labeled_samples)
             
-            # get reversed examples from self.labeled_examples
-            reversed_examples = self.gen_reverse_examples(new_labeled_examples)
-            
-#             with open('pseudo_label_result2.txt', 'w') as fw:
-#                 for example in new_labeled_examples:
-#                     text = ' '.join(example.text)
-#                     label = example.label
-#                     data = str(label) +'\t' + text
-#                     fw.write(data +'\n')
+            if reverse_augment is True:
+                self.labeled_examples.extend(reversed_examples)
+                print('ADD REVERSED_EXAMPLES {} -> {}'.format(len(reversed_examples),len(self.labeled_examples)))
 
-#             with open('pseudo_label_reversed_result2.txt', 'w') as fw:
-#                 for example in reversed_examples:
-#                     text = ' '.join(example.text)
-#                     label = example.label
-#                     data = str(label) +'\t' + text
-#                     fw.write(data +'\n')
+            model = self._train_epoches(self.labeled_examples, model, 30, dev_data, test_data)
             
-#             1/0
-            
-#             reversed_dataset = torchtext.data.Dataset(reversed_examples, 
-#                                                       fields = [('text', self.TEXT_field), ('label', self.LABEL_field)])
-#             reversed_batch_iter = torchtext.data.BucketIterator(dataset=reversed_dataset, batch_size=128,
-#                                                             sort_key=lambda x:len(x.text), sort_within_batch=True,
-#                                                             device=self.device, repeat=False, shuffle=True)
-
-            print('reverse_examples', len(reversed_examples), type(reversed_examples))
-            print('self.labeled_examples', len(self.labeled_examples), type(self.labeled_examples))
-        
-        
-        
-            self.labeled_examples.extend(reversed_examples)
-            
-            
-            #load labelled training dataset
-            labeled_dataset = torchtext.data.Dataset(self.labeled_examples,
-                                                     fields=[('text', self.TEXT_field), ('label', self.LABEL_field)])
-            label_batch_iter = torchtext.data.BucketIterator(dataset=labeled_dataset, batch_size=128,
-                                                             sort_key=lambda x:len(x.text), sort_within_batch=True,
-                                                             device=self.device, repeat=False, shuffle=True)
-            # Train model SSL way
-            loss_total = 0
-            step = 0
-            model.train()
-            for idx, label_batch in enumerate(label_batch_iter):
-                input_variable, input_lengths = label_batch.text
-                print('label', input_variable.size())
-                target_variable = label_batch.label
-                logits, attn = model(input_variable, input_lengths.tolist())
-                self.optimizer.optimizer.zero_grad()
-                loss = self.loss(logits, target_variable)
-                loss.backward()
-                self.optimizer.step()
-                step +=1
-                loss_total += loss
-                logits = F.softmax(logits, dim=-1)
-                prob, indice = logits.max(1)
-
-#             for idx, reverse_batch in enumerate(reversed_batch_iter):
-#                 input_variable, input_lengths = reverse_batch.text
-#                 print('reverse', input_variable.size())
-#                 target_variable = reverse_batch.label
-#                 logits, attn = model(input_variable, input_lengths.tolist())
-#                 self.optimizer.optimizer.zero_grad()
-#                 loss = self.loss(logits, target_variable)
-#                 loss.backward()
-#                 self.optimizer.step()
-#                 step +=1
-#                 loss_total += loss
-#                 logits = F.softmax(logits, dim=-1)
-#                 prob, indice = logits.max(1)
-
-                
-            epoch_loss_avg = loss_total / step
-            log_msg = "Finished epoch %d: SSL Train %s: %.4f" % (epoch, 'Cross_Entropy', epoch_loss_avg)
-
-            if dev_data is not None:
-                model.eval()
-                dev_loss, accuracy = self.evaluator.evaluate(model, dev_data)
-                self.dev_acc = accuracy
-                log_msg +=  ", Dev %s: %.4f, Accuracy: %.4f" % ('Cross_Entropy', dev_loss, accuracy)
-                log.info(log_msg)
-
-            if test_data is not None:
-                model.eval()
-                test_loss, accuracy = self.evaluator.evaluate(model, test_data)
-                log_msg +=  ", Test %s: %.4f, Accuracy: %.4f" % ('Cross_Entropy', test_loss, accuracy)
-                log.info(log_msg)
+            if self.ssl_early_stopping_patience == self.ssl_early_stopping or len(self.unlabeled_examples) == 0:
+                print('SSL EARLY STOPPING EPOCH {}'.format(epoch))
+                break

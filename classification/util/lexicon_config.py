@@ -10,7 +10,7 @@ NEGATOR = ["aint", "arent","cannot","cant","couldnt","darent", "didnt","doesnt",
 
 CONTRAST = ['but', 'however', 'But', 'However']
 
-END_WORDS = ['.', ',', '!', '?', '...',';', "'", '-', ')', '"']
+END_WORDS = ['.', ',', '!', '?', '...',';', "'", '-', ')', '"', "because", "therefore", "so"]
 
 STOP_WORDS = ['i', 'me', 'my', 'myself', 'we', 'our', 
 			'ours', 'ourselves', 'you', 'your', 'yours', 

@@ -14,6 +14,7 @@ from evaluator import Evaluator
 from util.vocab import itos, extract_lexicon, merge_lexicon
 from util.checkpoint import Checkpoint
 from util.lexicon_config import END_WORDS, STOP_WORDS
+from trainer.EarlyStopping import EarlyStopping
 
 
 class Trainer(object):
@@ -26,7 +27,7 @@ class Trainer(object):
         checkpoint_every (int, optional): number of batches to checkpoint after, (default: 100)
     """
     def __init__(self, expt_dir='experiment', loss=None, batch_size=64,
-                 random_seed=None, checkpoint_every=100, print_every=100,lexicon_dir='generated_lexicons'):
+                 random_seed=None, checkpoint_every=100, print_every=100):
         self._trainer = "Simple Trainer"
         self.random_seed = random_seed
         if random_seed is not None:
@@ -41,23 +42,16 @@ class Trainer(object):
         
         if not os.path.isabs(expt_dir):
             expt_dir = os.path.join(os.getcwd(), expt_dir)
-        
-        if not os.path.isabs(expt_dir):
-            lexicon_dir = os.path.join(os.getcwd(), lexicon_dir)
-        
+                
         self.expt_dir = expt_dir
-        self.lexicon_dir = lexicon_dir
         
         if not os.path.exists(self.expt_dir):
             os.makedirs(self.expt_dir)
 
-        if not os.path.exists(self.lexicon_dir):
-            os.makedirs(self.lexicon_dir)
         
         self.batch_size = batch_size
         self.logger = logging.getLogger(__name__)
         self.input_vocab = None
-        self.filtering_stoi_list = None
         self.lexicon_stats = {0:{}, 1:{}}
         self.neg_lexicons = []
         self.pos_lexicons= []
@@ -158,7 +152,9 @@ class Trainer(object):
         end_words_idx = [self.input_vocab.stoi[word] for word in END_WORDS]
         stop_words_idx = [self.input_vocab.stoi[word] for word in STOP_WORDS]
         return list(set(end_words_idx+stop_words_idx))
-        
+
+    
+    
     def _train_epoches(self, data, model, n_epochs,
                        start_epoch, start_step, dev_data=None, test_data=None):
         log = self.logger
@@ -179,13 +175,12 @@ class Trainer(object):
         step_elapsed = 0
         best_accuracy = 0
         
-        # epoch 안에서 해야할지도. 
-        #############################################
-        self.filtering_stoi_list = self.filter_stoi()
+        early_stopping = EarlyStopping(patience = 10, verbose=True)
         
         for epoch in range(start_epoch, n_epochs + 1):
             log.debug("Epoch: %d, Step: %d" % (epoch, step))            
             batch_generator = batch_iterator.__iter__()
+            
             # consuming seen batches from previous training
             for idx in range((epoch - 1) * steps_per_epoch, step):
                 next(batch_generator)
@@ -212,20 +207,11 @@ class Trainer(object):
                         print_loss_avg)
                     log.info(log_msg)
 
-                # Checkpoint
-                if step % self.checkpoint_every == 0 or step == total_steps:
-                    Checkpoint(model=model,
-                               optimizer=self.optimizer,
-                               epoch=epoch, step=step,
-                               input_vocab=data.fields['text'].vocab).save(self.expt_dir)
-
-            intersections = self.get_intersection(self.pos_lexicons, self.neg_lexicons, epoch)
-            
-            if intersections is not None:
-                self.filter_common_word(intersections, self.neg_lexicons, epoch)
-            
-            self.save_lexicons(self.lexicon_dir +'/neg_epoch:{}'.format(epoch), self.neg_lexicons)
-            self.save_lexicons(self.lexicon_dir +'/pos_epoch:{}'.format(epoch), self.pos_lexicons)
+#             intersections = self.get_intersection(self.pos_lexicons, self.neg_lexicons, epoch)
+#             if intersections is not None:
+#                 self.filter_common_word(intersections, self.neg_lexicons, epoch)
+#             self.save_lexicons(self.lexicon_dir +'/neg_epoch:{}'.format(epoch), self.neg_lexicons)
+#             self.save_lexicons(self.lexicon_dir +'/pos_epoch:{}'.format(epoch), self.pos_lexicons)
             
             # reset neg/pos/intersection lexcions
             self.neg_lexicons = []
@@ -238,26 +224,28 @@ class Trainer(object):
             log_msg = "Finished epoch %d: Train %s: %.4f" % (epoch, self.loss.name, epoch_loss_avg)
             if dev_data is not None:
                 model.eval()
-                dev_loss, accuracy = self.evaluator.evaluate(model, dev_data, self.filtering_stoi_list)
+                dev_loss, dev_accuracy = self.evaluator.evaluate(model, dev_data)
 #                 self.optimizer.update(dev_loss, epoch)
-                test_loss, test_acc = self.evaluator.evaluate(model, test_data, self.filtering_stoi_list)
-    
-                if accuracy > best_accuracy:
-                    best_accuracy = accuracy
+                early_stopping(dev_loss, model, self.optimizer, epoch, step, self.input_vocab, self.expt_dir)
+                if dev_accuracy > best_accuracy:
+                    best_accuracy = dev_accuracy
                     Checkpoint(model=model,
                                optimizer=self.optimizer,
                                epoch=epoch, step=step,
                                input_vocab=data.fields['text'].vocab).save(self.expt_dir +'/best_accuracy')
-                    
-                log_msg += ", Dev %s: %.4f, Accuracy: %.4f" % (self.loss.name, dev_loss, accuracy)
-                log_msg += ", test %s: %.4f, test Accuracy: %.4f" % (self.loss.name, test_loss, test_acc)
+                    print(self.expt_dir +'/best_accuracy')
 
+                test_loss, test_acc = self.evaluator.evaluate(model, test_data)
+                log_msg += ", Dev %s: %.4f, Accuracy: %.4f" % (self.loss.name, dev_loss, dev_accuracy)
+                log_msg += ", test %s: %.4f, test Accuracy: %.4f" % (self.loss.name, test_loss, test_acc)
                 model.train(mode=True)
-                
             else:
                 self.optimizer.update(epoch_loss_avg, epoch)
-
+            
             log.info(log_msg)
+            if early_stopping.early_stop:
+                print("Early Stopping")
+                break
             
             
     def train(self, model, data, num_epochs=5,
@@ -298,9 +286,9 @@ class Trainer(object):
             if optimizer is None:
                 optimizer = Optimizer(optim.Adam(model.parameters()), max_grad_norm=5)
             self.optimizer = optimizer
-            
+        
+        
         self.input_vocab = data.fields['text'].vocab
         self.logger.info("Optimizer: %s, Scheduler: %s" % (self.optimizer.optimizer, self.optimizer.scheduler))
-        lexicon = self._train_epoches(data, model, num_epochs,
-                                      start_epoch, step, dev_data=dev_data, test_data=test_data)
-        return model, lexicon
+        self._train_epoches(data, model, num_epochs, start_epoch, step, dev_data=dev_data, test_data=test_data)
+        return model

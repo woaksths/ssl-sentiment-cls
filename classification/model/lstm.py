@@ -12,17 +12,17 @@ class LSTM(nn.Module):
         if embedding is not None:
             self.embedding.weight = nn.Parameter(embedding)
         self.variable_lengths= variable_lengths
-        self.embedding.weight.requires_grad = update_embedding
+        self.embedding.weight.requires_grad = True
 
         self.max_len = max_len
         self.hidden_size = hidden_size
         self.n_layers= n_layers
         self.input_dropout_p = input_dropout_p
-        self.input_dropout = nn.Dropout(p=0.1)
+        self.input_dropout = nn.Dropout(p=0)
         self.dropout_p = dropout_p
         
         self.lstm = nn.LSTM(self.embedding.embedding_dim, hidden_size, n_layers, 
-                            batch_first=True, bidirectional=bidirectional, dropout=0.2)
+                            batch_first=True, bidirectional=bidirectional, dropout=0)
         if bidirectional is True:
             self.classifier = nn.Linear(self.hidden_size*2, 2) # 2 -> clsas_label 
         else:
@@ -69,8 +69,8 @@ class Classifier_Attention_LSTM(nn.Module):
         self.embedding = nn.Embedding.from_pretrained(embedding)
         if embedding is not None:
             self.embedding.weight = nn.Parameter(embedding)
-#         self.embedding = nn.Embedding(vocab_size, 300)
-        self.embedding.weight.requires_grad = True
+            self.embedding.weight.requires_grad = True
+
         self.rnn = nn.LSTM(300, 300, batch_first=True)
         self.tanh1 = nn.Tanh()
         self.w = nn.Parameter(torch.zeros(300))

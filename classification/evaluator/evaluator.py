@@ -36,7 +36,7 @@ class Evaluator(object):
         batch_iterator = torchtext.data.BucketIterator(
             dataset=data, batch_size=self.batch_size,
             sort=True, sort_key=lambda x: len(x.text),
-            device=device, train=False, repeat=False, shuffle=True)
+            device=device, train=False, repeat=False, shuffle=False)
         
         acc_loss = 0
         idx = 0
@@ -44,10 +44,8 @@ class Evaluator(object):
             for batch in batch_iterator:
                 input_variables, input_lengths = getattr(batch, 'text')
                 target_variables = getattr(batch, 'label')
-                
 #                 logits, attn = model(input_variables, input_lengths.tolist(),filtering_idx_list)
                 logits, attn = model(input_variables, input_lengths.tolist())
-
                 loss = criterion(logits, target_variables)
                 acc_loss += loss.item()
                 logits = F.softmax(logits, dim=-1)

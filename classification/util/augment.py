@@ -8,6 +8,34 @@ from .lexicon_config import *
 from .lexicon_utils import *
 
 
+def negator_preprocess(text):
+    text = text.replace("ain ' t", "ain't")
+    text = text.replace("aren ' t", "aren't")
+    text = text.replace("can ' t", "can't")
+    text = text.replace("couldn ' t", "couldn't")
+    text = text.replace("daren ' t", "daren't")
+    text = text.replace("didn ' t", "didn't")
+    text = text.replace("doesn ' t", "doesn't")
+    text = text.replace("don ' t", "don't")
+    text = text.replace("hadn ' t", "hadn't")
+    text = text.replace("hasn ' t", "hasn't")
+    text = text.replace("haven ' t", "haven't")
+    text = text.replace("isn ' t", "isn't")
+    text = text.replace("mightn ' t", "mightn't")
+    text = text.replace("mustn ' t", "mustn't")
+    text = text.replace("needn ' t", "needn't")
+    text = text.replace("weren ' t", "weren't")
+    text = text.replace("wasn ' t", "wasn't")
+    text = text.replace("shouldn ' t", "shouldn't")
+    text = text.replace("won ' t", "won't")
+    text = text.replace("wouldn ' t", "wouldn't")
+    text = text.replace("oughtn ' t", "oughtn't")
+    text = text.replace("shan ' t", "shan't")
+    text = text.replace("' ll", "'ll")
+    text = text.replace("' d", "'d")
+    text = text.replace("' v", "'v")
+    return text
+
 
 def get_wn_params(word_pos):
     adj_pos_list = ['JJ' ,'JJS' ,'JJR']
@@ -31,7 +59,7 @@ def penn_to_wn(tag):
         return wn.ADV
     elif tag.startswith('V'):
         return wn.VERB
-    return [wn.ADJ, wn.ADJ_SAT, wn.NOUN, wn.ADV, wn.VERB]
+    return None
 
 
 def get_wordnet_pos(word):
@@ -65,7 +93,7 @@ def tokenize_and_tag(sent):
                 if tok == '#':
                     token_pos_list[idx] =(neg_tok, 'NEGATOR')
                     break
-    
+                    
     lemmatized_tokens = get_lemmatized_sent(sent_temp)
 
     if len(negator_temp) >0:
@@ -98,6 +126,56 @@ def get_antonyms(word):
     return list(antonyms_list)
 
 
+
+def get_antonyms_with_tag(word, tag):
+    antonyms_list = []
+    tag_list = None
+    if isinstance(tag, list):
+        tag_list = tag
+    else:
+        tag_list = penn_to_wn(tag)
+#     print(word, tag)
+    for syn in wn.synsets(word):
+        if syn.pos() in tag_list:
+            for term in syn.lemmas():
+                if term.antonyms():
+                    antonyms_list.append(term.antonyms()[0].name())
+            for sim_syn in syn.similar_tos():
+                for term in sim_syn.lemmas():
+                    if term.antonyms():
+                        antonyms_list.append(term.antonyms()[0].name())
+    return list(antonyms_list)
+
+
+
+def augment_antonym_lexicons(golden_lexicons):
+    augmented_lexicons = {0:set(), 1:set()}
+    for label in golden_lexicons:
+        label = int(label)
+        for word, tag in golden_lexicons[label]:
+            antonyms = get_antonyms_with_tag(word, tag)
+            reverse_label = 1 - label
+            for antonym in antonyms:
+                augmented_lexicons[reverse_label].add(antonym)
+            augmented_lexicons[label].add(word)
+    return augmented_lexicons
+    
+
+
+def augment_syn_lexicons(golden_lexicons):
+    candidate = {}
+    for label in golden_lexicons:
+        label = int(label)
+        if label not in candidate:
+            candidate[label] = set()
+        for word, tag in golden_lexicons[label]:
+            synonyms = get_synonyms(word, tag)
+            for synonym in synonyms:
+                candidate[label].add(synonym)
+    return candidate
+
+
+
 def get_synonyms(origin_word, tag):
     synonyms = set()
     tag_list = penn_to_wn(tag)
@@ -112,6 +190,7 @@ def get_synonyms(origin_word, tag):
     return list(synonyms)
 
 
+
 def get_hypernyms(origin_word, tag):
     hypernyms = []
     tag_list = penn_to_wn(tag)
@@ -121,6 +200,7 @@ def get_hypernyms(origin_word, tag):
     if origin_word in hypernyms:
         hypernyms.remove(origin_word)
     return list(set(hypernyms))
+
 
 
 def get_hyponyms(origin_word, tag):
@@ -133,6 +213,7 @@ def get_hyponyms(origin_word, tag):
     if origin_word in hyponyms:
         hyponyms.remove(origin_word)
     return list(set(hyponyms))
+
 
 
 def sample_antonym(token, origin_label):
@@ -151,6 +232,48 @@ def sample_antonym(token, origin_label):
     return result
 
 
+def gen_reverse_sent_with_lexicons(data, lexicons):
+    origin_label = data[0]
+    origin_text = data[1]
+    origin_text = negator_preprocess(origin_text)
+    reversed_label = 1 - origin_label
+    reversed_sent = []
+    token_pos_list, lemmatized_tokens = tokenize_and_tag(origin_text)
+    assert len(token_pos_list) == len(lemmatized_tokens)
+    i = 0
+    lexicons = lexicons[0] | lexicons[1]
+    
+    while i != len(token_pos_list):
+        token = token_pos_list[i][0]
+        tag = penn_to_wn(token_pos_list[i][1])
+        lemmatized_token = lemmatized_tokens[i]
+        if token in NEGATOR:
+            i += 1
+            while i != len(token_pos_list) and token_pos_list[i][0] not in END_WORDS and token_pos_list[i][0] not in NEGATOR:
+                reversed_sent.append(token_pos_list[i][0])
+                i += 1
+        elif (wn.morphy(token) in lexicons or token in lexicons) and (token_pos_list[i][1].startswith('J') or token_pos_list[i][1].startswith('N') or token_pos_list[i][1].startswith('R') or token_pos_list[i][1].startswith('V')):
+            antonyms = get_antonyms_with_tag(token, token_pos_list[i][1])
+            lemmtized_antonyms = get_antonyms_with_tag(lemmatized_token, token_pos_list[i][1])
+            morphy_token = wn.morphy(token)
+            morphy_antonyms = []
+            if morphy_token is not None:
+                morphy_antonyms = get_antonyms_with_tag(morphy_token, token_pos_list[i][1])
+            candidate_list = list(set(antonyms + lemmtized_antonyms + morphy_antonyms))
+            antonym = None
+            if len(candidate_list) != 0:
+                antonym = random.choice(candidate_list)
+            else:
+                antonym = "not " + token
+            reversed_sent.append(antonym)
+            i += 1
+        else:
+            reversed_sent.append(token)
+            i += 1
+    reversed_sent = ' '.join(reversed_sent)
+    return reversed_label, reversed_sent
+    
+    
 def gen_reverse_sent(data):
     origin_label = data[0]
     origin_text = data[1].lower()
@@ -159,6 +282,9 @@ def gen_reverse_sent(data):
     reversed_label = 1 - int(origin_label)
     token_pos_list, lemmatized_tokens = tokenize_and_tag(origin_text)
     i = 0
+    #print('token_pos', token_pos_list)
+#     print('lemmatized_tokens',  ' '.join(lemmatized_tokens))
+    
     while i != len(token_pos_list):
         token = token_pos_list[i][0].lower()
         tag = penn_to_wn(token_pos_list[i][1])
@@ -248,44 +374,3 @@ def gen_similiar_sent(data):
                 similar_text.append(hypword)
     similar_text = ' '.join(similar_text)
     return origin_label, similar_text
-    
-
-
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('--file_name', action='store', dest='file_name', help='Path to file_name ') 
-#     parser.add_argument('--type', action='store', dest='type', help='augment type')
-#     opt = parser.parse_args()
-
-#     file_name = opt.file_name
-#     new_file_name = '/'.join(file_name.split('/')[:-1]) + '/augmented_{}_'.format(opt.type)+file_name.split('/')[-1]
-#     dataset = get_pair_dataset(file_name)
-#     alpha_sr = [0.1, 0.2, 0.3]
-    
-#     with open(new_file_name,'w') as fw:
-#         for idx, data in enumerate(dataset):
-#             origin_label, origin_text = data[0], data[1]
-#             origin_text, lemmatized_tokens = tokenize_and_tag(origin_text.lower())
-#             origin_text = ' '.join([val[0] for val in origin_text])
-
-#             # reverse dataset
-#             reverse_label, reverse_text = gen_reverse_sent(data)    
-#             # similar dataset
-#             # similar_label, similar_text = gen_similiar_sent(data)
-#             alpha = random.choice(alpha_sr)
-#             n_sr = max(1, int(alpha* len(origin_text.split(' '))))
-#             similar_text = synonym_replacement(origin_text.split(' '), n_sr)
-#             similar_text = ' '.join(similar_text)
-
-#             origin_text = origin_text.strip()
-#             reverse_text = reverse_text.strip()
-#             similar_text = similar_text.strip()
-
-#             print('origin', origin_text)
-#             print('reverse', reverse_text)
-#             print('similar', similar_text)
-#             1/0
-#             origin = str(origin_label) + '\t' + origin_text
-#             similar = str(origin_label) + '\t' + similar_text
-#             reverse = str(reverse_label) + '\t' +  reverse_text
-#             1/0

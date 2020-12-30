@@ -24,8 +24,9 @@ from util.dataset import get_golden_lexicons, get_annotated_word_tag
 parser = argparse.ArgumentParser()
 
 ###################################################################
-### arugment for supervised learning
+### argment for supervised learning
 ###################################################################
+
 parser.add_argument('--train_path', action='store', dest='train_path',
                     help='Path to train data')
 parser.add_argument('--dev_path', action='store', dest='dev_path',
@@ -38,20 +39,27 @@ parser.add_argument('--lexicon_dir', action='store', dest='lexicon_dir', default
                     help='Path to generated lexcion directory.')
 parser.add_argument('--sampled_dataset_dir', action='store', dest='sampled_dataset_dir', default='./sampled_dataset',
                     help='Path to sampled dataset directory.')
+parser.add_argument('--reverse_augment', action='store_true', dest='reverse_augment', default=False,
+                    help='Whether augment with reverse augment operation or not')
+parser.add_argument('--do_sample_dataset', action='store_true', dest='do_sample_dataset', default=False,
+                    help='Whether to load or sample dataset ')
 
 ##################################################################
-### argument for semi supervised learning
+### argment for semi supervised learning
 ##################################################################
+
 parser.add_argument('--is_ssl_train', action='store_true', dest='is_ssl_train', default=False,
                     help='Indicates if train way is based on semi-supervised learning')
-parser.add_argument('--annotated_lexicon', action='store', dest='annotated_lexicon', 
-                    help='golden lexicon about extremely small training dataset')
-parser.add_argument('--labeled_data', action='store', dest='labeled_data', 
-                    help='extremely small training dataset')
-parser.add_argument('--unlabeled_data', action='store', dest='unlabeled_data',
-                    help='a vast of unlabeled dataset')
-parser.add_argument('--dev_data', action='store', dest='dev_data', 
-                    help='dev data set for labeled_data')
+# parser.add_argument('--annotated_lexicon', action='store', dest='annotated_lexicon', 
+#                     help='golden lexicon about extremely small training dataset')
+# parser.add_argument('--labeled_data', action='store', dest='labeled_data', 
+#                     help='extremely small training dataset')
+# parser.add_argument('--unlabeled_data', action='store', dest='unlabeled_data',
+#                     help='a vast of unlabeled dataset')
+# parser.add_argument('--dev_data', action='store', dest='dev_data', 
+#                     help='dev data set for labeled_data')
+parser.add_argument('--ssl_method', action='store', dest='ssl_method',
+                    help='ssl methods')
 parser.add_argument('--test_data', action='store', dest='test_data',
                     help='test data set')
 parser.add_argument('--log-level', dest='log_level',
@@ -65,8 +73,11 @@ logging.info(opt)
 
 # config dataset
 max_len = 300
-sample_num_per_class = 10
 class_num = 2
+
+sample_num_per_class = 10
+ratio_label_0 = 0.7
+ratio_label_1 = 0.3
 num_aug = 0
 
 # set up fields
@@ -76,7 +87,6 @@ LABEL = torchtext.data.Field(sequential=False, use_vocab=False, batch_first=True
 
 if not opt.is_ssl_train:  
     # load dataset
-    
     total_dataset = get_dataset(opt.train_path)
     test_dataset = get_dataset(opt.dev_path)
 
@@ -88,19 +98,29 @@ if not opt.is_ssl_train:
         os.makedirs(sampled_dataset_dir)
 
     # make initital dataset (train, dev, unlabeled)
-    train_data, dev_data, unlabeled_data = sampling_initial_dataset(total_dataset, class_num, sample_num_per_class)
-    augmented_train = gen_augmented_dataset(train_data, num_aug)
-    augmented_dev = gen_augmented_dataset(dev_data, 0)
+    if opt.do_sample_dataset:
+        train_data, dev_data, unlabeled_data = sampling_initial_dataset(total_dataset, class_num, sample_num_per_class)
+        train_data = sample_unbalanced_dataset(train_data, ratio_label_0, ratio_label_1)
+        augmented_train = []
+        reverse_data = augment_reverse(train_data)
+        write_sampled_dataset(sampled_dataset_dir +'/reverse_data.txt', reverse_data)
+        
+        if opt.reverse_augment:
+            augmented_train = reverse_data + train_data
 
-    write_sampled_dataset(sampled_dataset_dir +'/augmented_train.txt', augmented_train)
-    write_sampled_dataset(sampled_dataset_dir +'/augmented_dev.txt', augmented_dev)
-    write_sampled_dataset(sampled_dataset_dir +'/labeled_data.txt', train_data)
-    write_sampled_dataset(sampled_dataset_dir +'/dev.txt', dev_data)
-    write_sampled_dataset(sampled_dataset_dir +'/unlabeled_data.txt', unlabeled_data)
-    
-    # experiment1: augmented_train으로 했을 때와 아닐 때 
-    train_data = augmented_train 
-    dev_data = augmented_dev    
+        write_sampled_dataset(sampled_dataset_dir +'/augmented_labeled_data.txt', augmented_train)
+        write_sampled_dataset(sampled_dataset_dir +'/labeled_data.txt', train_data)
+        write_sampled_dataset(sampled_dataset_dir +'/dev.txt', dev_data)
+        write_sampled_dataset(sampled_dataset_dir +'/unlabeled_data.txt', unlabeled_data)
+        if opt.reverse_augment:
+            train_data = augmented_train 
+    else:
+        dev_data = get_dataset(sampled_dataset_dir +'/dev.txt')
+        unlabeled_data = get_dataset(sampled_dataset_dir +'/unlabeled_data.txt')
+        if opt.reverse_augment:
+            train_data = get_dataset(sampled_dataset_dir +'/labeled_data.txt') + get_dataset(sampled_dataset_dir +'/reverse_data.txt')
+        else:
+            train_data = get_dataset(sampled_dataset_dir +'/labeled_data.txt')        
 
     train_examples = examples_from_dataset(train_data, max_len)
     dev_examples = examples_from_dataset(dev_data, max_len)
@@ -118,11 +138,12 @@ if not opt.is_ssl_train:
     
     TEXT.build_vocab(total_data, vectors=glove)
     input_vocab = TEXT.vocab
-    # define model
+    
+    # Define model
     hidden_size = 128 # or 128, 256
     model = LSTM(input_vocab.vectors, max_len, hidden_size,
                  variable_lengths=True, bidirectional=False)
-#     model = Classifier_Attention_LSTM(input_vocab.vectors, 2)
+    #model = Classifier_Attention_LSTM(input_vocab.vectors, 2)
 
     if torch.cuda.is_available():
         model.cuda()
@@ -143,30 +164,30 @@ if not opt.is_ssl_train:
     # Train supervised model
     t = Trainer(loss=criterion, batch_size=128,
                 checkpoint_every= 300, print_every=100,
-                expt_dir=opt.expt_dir +'/supervised', lexicon_dir = opt.lexicon_dir)
-    model, lexicon = t.train(model, train_data, num_epochs=50,
-                             dev_data=dev_data, optimizer=optimizer, test_data=test_data)
-
-    evaluator = Evaluator(loss=criterion, batch_size=64)
-    loss, accuracy = evaluator.evaluate(model, test_data)
-    print(model)
-    print('supervised model::: loss > {} accuracy{}'.format(loss, accuracy))
-else:
-    assert opt.load_checkpoint is not None
-    assert opt.unlabeled_data is not None 
-    assert opt.labeled_data is not None
-    assert opt.dev_data is not None
-    assert opt.test_data is not None
-    assert opt.annotated_lexicon is not None
-
-    outputs_dir = opt.labeled_data.split('/')[0]
-
-    # load sampled dataset and golden lexicon
-    unlabeled_data = get_dataset(opt.unlabeled_data)
-    labeled_data = get_dataset(opt.labeled_data)
-    dev_data = get_dataset(opt.dev_data)
-    test_data = get_dataset(opt.test_data)
+                expt_dir=opt.expt_dir +'/supervised')
+    model = t.train(model, train_data, num_epochs=100,
+                    dev_data=dev_data, optimizer=optimizer, test_data=test_data)
     
+else:
+    assert opt.is_ssl_train is True
+    assert opt.load_checkpoint is not None
+    assert opt.test_data is not None
+    assert opt.sampled_dataset_dir is not None
+    assert opt.ssl_method is not None
+    assert opt.expt_dir is not None
+    assert opt.reverse_augment is not None
+    
+    ssl_method = opt.ssl_method.lower()
+    outputs_dir = opt.sampled_dataset_dir
+    
+    # load sampled dataset and golden lexicon
+    if opt.reverse_augment:
+        labeled_data = get_dataset(outputs_dir +'/labeled_data.txt') + get_dataset(outputs_dir +'/reverse_data.txt')
+    else:
+        labeled_data = get_dataset(outputs_dir +'/labeled_data.txt')
+    unlabeled_data = get_dataset(outputs_dir + '/unlabeled_data.txt')
+    dev_data = get_dataset(outputs_dir+'/dev.txt')
+    test_data = get_dataset(opt.test_data)
     
     labled_examples = examples_from_dataset(labeled_data, max_len)
     unlabeled_examples = examples_from_dataset(unlabeled_data, max_len)
@@ -177,8 +198,9 @@ else:
     unlabeled_dataset = torchtext.data.Dataset(unlabeled_examples, fields=[('text', TEXT), ('label', LABEL)])
     dev_dataset = torchtext.data.Dataset(dev_examples, fields=[('text', TEXT), ('label', LABEL)])
     test_dataset = torchtext.data.Dataset(test_examples, fields=[('text', TEXT), ('label', LABEL)])
+
 #     golden_lexicons = get_golden_lexicons(opt.annotated_lexicon)
-    golden_lexicons = get_annotated_word_tag(opt.annotated_lexicon, class_num=2)
+#     golden_lexicons = get_annotated_word_tag(opt.annotated_lexicon, class_num=2)
     
     # load best checkpoint 
     checkpoint = Checkpoint.get_latest_checkpoint(opt.load_checkpoint)
@@ -194,21 +216,21 @@ else:
     defaults = resume_optim.param_groups[0]
     defaults.pop('params', None)
     defaults.pop('initial_lr', None)
+    del checkpoint
     
     optimizer.optimizer = resume_optim.__class__(model.parameters(), **defaults)
-    
     evaluator = Evaluator(loss=criterion, batch_size=64)
-    loss, accuracy = evaluator.evaluate(checkpoint.model, test_dataset)
+    loss, accuracy = evaluator.evaluate(model, test_dataset)
     print(model)
     # labeled_dataset, unlabeled_dataset, dev_dataset, test_dataset, golden_lexicons
     print('supervised model::: loss > {} accuracy{}'.format(loss, accuracy))
     
     # Train semi-supervised model(pseudo-labeling-way)
     ssl_trainer = SSLTrainer(model=model, loss=criterion, 
-                             batch_size=16, optimizer=optimizer,
-                             vocab=input_vocab, expt_dir=opt.expt_dir + '/SSL', 
-                             outputs_dir = outputs_dir, annotated_lexicons=golden_lexicons, 
+                             batch_size=128, optimizer=optimizer,
+                             vocab=input_vocab, expt_dir=opt.expt_dir + '/'+ ssl_method, 
+                             outputs_dir = outputs_dir, annotated_lexicons=None, 
                              labeled_data= labeled_dataset, unlabeled_data=unlabeled_dataset,
                              text_field=TEXT, label_field=LABEL)
-    ssl_trainer.train(num_epochs=40, dev_data=dev_dataset, test_data=test_dataset)
-    1/0
+    
+    ssl_trainer.ssl_train(num_epochs=40, dev_data=dev_dataset, test_data=test_dataset, methods= ssl_method, reverse_augment=opt.reverse_augment)

@@ -27,7 +27,7 @@ def itos_sent(vocab, input_var):
 
 def extract_lexicon(input_vocab, input_variable, target_variable, logits, attn):
     lexicon = {0:[], 1:[]}
-    attn_probs, attn_indices = attn.topk(k=10, dim=-1)
+    attn_probs, attn_indices = attn.topk(k=5, dim=-1)
     logits = F.softmax(logits, dim=-1)
     confidences, indices = logits.max(dim=-1)
     for idx, (confidence, (pred, label)) in enumerate(zip(confidences, zip(indices, target_variable))):
@@ -44,11 +44,14 @@ def extract_lexicon(input_vocab, input_variable, target_variable, logits, attn):
                 else:
                     word_set.append(word)
             lexicon[label].append(word_set)        
-#             word_set = [input_vocab.itos[vocab_idx.item()] for vocab_idx in lexicon_idx]
-#             lexicon[label].append(word_set)
-#             print('label: {}'.format(label), word_set)
     return lexicon
 
+
+def get_words_by_attn(input_vocab, input_var, attn_indices):
+    word_indices= [input_var[index].item() for index in attn_indices]
+    indices2words = [input_vocab.itos[index] for index in word_indices]
+    return indices2words
+    
 
 def merge_lexicon(total_dict, step_dict):
     for label in step_dict:
@@ -58,5 +61,4 @@ def merge_lexicon(total_dict, step_dict):
             else:
                 total_dict[label][word] = step_dict[label][word]
     return total_dict
-
 
